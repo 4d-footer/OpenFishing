@@ -68,6 +68,7 @@
 			const body = await res.json().catch(() => ({}));
 			if (res.status === 201 || res.status === 409) {
 				if (res.status === 201) addWater(body.gauge);
+				selected = null;
 				g.saved = true;
 				loadWaters(true);
 			} else {
@@ -86,6 +87,7 @@
 			const res = await fetch('/api/waters/' + id, { method: 'DELETE' });
 			if (res.ok) {
 				removeWater(id);
+				selected = null;
 				const hit = results?.find((r) => r.siteId === siteId);
 				if (hit) hit.saved = false;
 			}
@@ -97,12 +99,8 @@
 	const fmtFlow = (v: number) => Math.round(v).toLocaleString();
 	const fmtStage = (v: number) => v.toFixed(2);
 
-	let highlight = $state<string | null>(null);
-	function focusTile(id: string) {
-		highlight = id;
-		document.getElementById(`tile-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-		setTimeout(() => { if (highlight === id) highlight = null; }, 2500);
-	}
+	// The gauge the map is snapped to; null = frame every followed gauge.
+	let selected = $state<string | null>(null);
 
 	const card = 'background:var(--of-bg-surface); border:1px solid var(--of-border-subtle); border-radius:14px; padding:18px;';
 	const btn = 'font-size:0.8rem; font-weight:600; padding:7px 14px; border-radius:9px; cursor:pointer;';
@@ -169,7 +167,7 @@
 
 	<!-- Map of followed gauges -->
 	<section aria-label={t.watersMapHeading}>
-		<WatersMap gauges={waters.gauges} {t} onselect={focusTile} />
+		<WatersMap gauges={waters.gauges} {t} selectedId={selected} onselect={(id) => (selected = id)} />
 	</section>
 
 	<!-- Followed gauges -->
@@ -183,7 +181,7 @@
 		{/if}
 		<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:14px;">
 			{#each waters.gauges as g (g.id)}
-				<GaugeTile {g} {t} pending={!waters.loaded || waters.loading} busy={!!busy[g.siteId]} highlight={highlight === g.id} onremove={() => remove(g.id, g.siteId)} />
+				<GaugeTile {g} {t} pending={!waters.loaded || waters.loading} busy={!!busy[g.siteId]} selected={selected === g.id} onselect={() => (selected = selected === g.id ? null : g.id)} onremove={() => remove(g.id, g.siteId)} />
 			{/each}
 		</div>
 	{/if}

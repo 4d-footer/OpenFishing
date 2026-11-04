@@ -16,7 +16,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		const { forecast, stale } = await getForecast(row.siteId, row.lat, row.lng);
 		return Response.json({ forecast, stale }, { headers: { 'cache-control': 'private, no-store' } });
 	} catch (e) {
-		if (e instanceof ForecastError) return Response.json({ error: 'unavailable' }, { status: 503 });
+		if (e instanceof ForecastError) {
+			console.warn(`[waters] forecast for ${row.siteId} unavailable: ${e.detail || 'unknown'}`);
+			return Response.json({ error: 'unavailable' }, { status: 503 });
+		}
 		throw e;
 	}
 };

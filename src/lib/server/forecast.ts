@@ -19,18 +19,27 @@ const EMPTY_TTL = 5 * 60_000;
 const LOOKUP_TTL = 7 * 24 * 3600_000;
 const MIN_POINTS = 3;
 
+export type ForecastParam = '00060' | '00065';
+
 export interface Forecast {
 	source: 'nws' | 'nwm';
-	/** What the numbers are: discharge (cfs) or gauge height (ft). */
-	param: '00060' | '00065';
 	issuedAt: string | null;
 	lid: string | null;
-	points: [number, number][]; // [epoch ms, value], ascending
+	/** Discharge (cfs) and/or gauge height (ft); each ascending [epoch ms, value]. NWM has discharge only. */
+	series: Partial<Record<ForecastParam, [number, number][]>>;
+}
+
+/** Hours from `now` to the end of the longest series in a forecast. */
+export function forecastHorizonHours(f: Forecast, now = Date.now()): number {
+	let end = now;
+	for (const pts of Object.values(f.series)) if (pts?.length) end = Math.max(end, pts[pts.length - 1][0]);
+	return (end - now) / 3600_000;
 }
 
 export class ForecastError extends Error {
-	constructor(public code: 'unavailable') {
-		super(code);
+	/** `detail` says which call failed (for the server log). */
+	constructor(public code: 'unavailable', public detail = '') {
+		super(detail ? `${code}: ${detail}` : code);
 	}
 }
 
@@ -61,15 +70,15 @@ async function getJson(url: string): Promise<any | null> {
 	let res: Response;
 	try {
 		res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
-	} catch {
-		throw new ForecastError('unavailable');
+	} catch (e) {
+		throw new ForecastError('unavailable', `${new URL(url).host}${new URL(url).pathname} ${(e as Error)?.name ?? 'error'}`);
 	}
 	if (res.status === 404 || res.status === 400) return null;
-	if (!res.ok) throw new ForecastError('unavailable');
+	if (!res.ok) throw new ForecastError('unavailable', `${new URL(url).host}${new URL(url).pathname} HTTP ${res.status}`);
 	try {
 		return await res.json();
 	} catch {
-		throw new ForecastError('unavailable');
+		throw new ForecastError('unavailable', `${new URL(url).host}${new URL(url).pathname} bad JSON`);
 	}
 }
 
@@ -127,16 +136,18 @@ export function parseNwsForecast(body: any, lid: string): Forecast | null {
 		}
 		return out.sort((a, b) => a[0] - b[0]);
 	};
-	const secScale = String(f.secondaryUnits).toLowerCase() === 'kcfs' ? 1000 : String(f.secondaryUnits).toLowerCase() === 'cfs' ? 1 : null;
+	const secUnits = String(f.secondaryUnits).toLowerCase();
+	const secScale = secUnits === 'kcfs' ? 1000 : secUnits === 'cfs' ? 1 : null;
+	const series: Forecast['series'] = {};
 	if (secScale !== null) {
 		const flow = collect('secondary', secScale);
-		if (flow.length >= MIN_POINTS) return { source: 'nws', param: '00060', issuedAt, lid, points: flow };
+		if (flow.length >= MIN_POINTS) series['00060'] = flow;
 	}
 	if (String(f.primaryUnits).toLowerCase() === 'ft') {
 		const stage = collect('primary', 1);
-		if (stage.length >= MIN_POINTS) return { source: 'nws', param: '00065', issuedAt, lid, points: stage };
+		if (stage.length >= MIN_POINTS) series['00065'] = stage;
 	}
-	return null;
+	return Object.keys(series).length ? { source: 'nws', issuedAt, lid, series } : null;
 }
 
 // ── National Water Model ────────────────────────────────────────────────────────
@@ -203,7 +214,7 @@ async function nwmForecast(number: string): Promise<Forecast | null> {
 		const parsed = parseNwmSeries(r.value);
 		if (parsed && (!best || parsed.points[parsed.points.length - 1][0] > best.points[best.points.length - 1][0])) best = parsed;
 	}
-	return best ? { source: 'nwm', param: '00060', issuedAt: best.issuedAt, lid: null, points: best.points } : null;
+	return best ? { source: 'nwm', issuedAt: best.issuedAt, lid: null, series: { '00060': best.points } } : null;
 }
 
 // ── Public ──────────────────────────────────────────────────────────────────────

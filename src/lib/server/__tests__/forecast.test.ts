@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getForecast, parseNwsForecast, parseNwmSeries, resetForecastState, ForecastError } from '#lib/server/forecast.js';
+import { getForecast, parseNwsForecast, parseNwmSeries, resetForecastState, ForecastError, forecastHorizonHours } from '#lib/server/forecast.js';
 
 const H = 3600_000;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -40,20 +40,34 @@ afterEach(() => vi.unstubAllGlobals());
 describe('parseNwsForecast', () => {
 	it('converts kcfs to cfs and keeps ascending future points', () => {
 		const f = parseNwsForecast(nwsBody(), 'GLGM8')!;
-		expect(f).toMatchObject({ source: 'nws', param: '00060', lid: 'GLGM8' });
-		expect(f.points[0][1]).toBe(50_000);
-		expect(f.points).toHaveLength(8);
-		expect(f.points.every((p, i, a) => i === 0 || a[i - 1][0] < p[0])).toBe(true);
+		expect(f).toMatchObject({ source: 'nws', lid: 'GLGM8' });
+		const flow = f.series['00060']!;
+		expect(flow[0][1]).toBe(50_000);
+		expect(flow).toHaveLength(8);
+		expect(flow.every((p, i, a) => i === 0 || a[i - 1][0] < p[0])).toBe(true);
+	});
+	it('keeps both flow and stage when NWS publishes both', () => {
+		const f = parseNwsForecast(nwsBody(), 'X')!;
+		expect(Object.keys(f.series).sort()).toEqual(['00060', '00065']);
+		expect(f.series['00065']![0][1]).toBe(5);
+		expect(forecastHorizonHours(f)).toBeGreaterThan(30);
+	});
+	it('parses a real six-hourly, flat NWS forecast (Cacapon River near Great Cacapon)', () => {
+		const t0 = Math.ceil(now / (6 * H)) * 6 * H;
+		const body = { forecast: { issuedTime: iso(now - 14 * H), primaryUnits: 'ft', secondaryUnits: 'kcfs', data: Array.from({ length: 12 }, (_, i) => ({ validTime: iso(t0 + (i - 2) * 6 * H), primary: 1.5, secondary: 0.092 })) } };
+		const f = parseNwsForecast(body, 'GCPW2')!;
+		expect(f.series['00060']!.every((p) => Math.abs(p[1] - 92) < 1e-6)).toBe(true);
+		expect(f.series['00060']!.length).toBeGreaterThanOrEqual(8);
 	});
 	it('falls back to stage when flow is -999', () => {
 		const body = nwsBody();
 		body.forecast.data.forEach((r) => (r.secondary = -999));
 		const f = parseNwsForecast(body, 'X')!;
-		expect(f.param).toBe('00065');
-		expect(f.points[0][1]).toBe(5);
+		expect(f.series['00060']).toBeUndefined();
+		expect(f.series['00065']![0][1]).toBe(5);
 	});
 	it('accepts cfs units as-is', () => {
-		expect(parseNwsForecast(nwsBody(8, { secondaryUnits: 'cfs' }), 'X')!.points[0][1]).toBe(50);
+		expect(parseNwsForecast(nwsBody(8, { secondaryUnits: 'cfs' }), 'X')!.series['00060']![0][1]).toBe(50);
 	});
 	it('returns null for an empty forecast, too few points, or the zero issue time', () => {
 		expect(parseNwsForecast({ forecast: { issuedTime: '0001-01-01T00:00:00Z', data: [] } }, 'X')).toBeNull();
@@ -64,7 +78,7 @@ describe('parseNwsForecast', () => {
 	it('drops points more than 3 hours in the past', () => {
 		const body = nwsBody(8);
 		body.forecast.data[0].validTime = iso(now - 12 * H);
-		expect(parseNwsForecast(body, 'X')!.points).toHaveLength(7);
+		expect(parseNwsForecast(body, 'X')!.series['00060']).toHaveLength(7);
 	});
 });
 
@@ -103,7 +117,8 @@ describe('getForecast', () => {
 		nwsRoutes();
 		const { forecast, stale } = await getForecast('USGS-06043500', 45.4972, -111.2708);
 		expect(stale).toBe(false);
-		expect(forecast).toMatchObject({ source: 'nws', lid: 'GLGM8', param: '00060' });
+		expect(forecast).toMatchObject({ source: 'nws', lid: 'GLGM8' });
+		expect(forecast!.series['00060']).toBeTruthy();
 		expect(calls.some((c) => c.includes('/nldi/') || c.includes('/reaches/'))).toBe(false);
 	});
 
@@ -114,8 +129,9 @@ describe('getForecast', () => {
 		routes['/reaches/3855837/streamflow?series=medium_range'] = () => ({ body: {} });
 		routes['/reaches/3855837/streamflow'] = () => ({ body: nwmBody(18) });
 		const { forecast } = await getForecast('USGS-06043120', 45.297, -111.211);
-		expect(forecast).toMatchObject({ source: 'nwm', lid: null, param: '00060' });
-		expect(forecast!.points).toHaveLength(18);
+		expect(forecast).toMatchObject({ source: 'nwm', lid: null });
+		expect(forecast!.series['00060']).toHaveLength(18);
+		expect(forecast!.series['00065']).toBeUndefined();
 	});
 
 	it('falls back to the model when the NWS gauge has an empty forecast', async () => {
@@ -173,6 +189,11 @@ describe('getForecast', () => {
 	it('throws ForecastError when NOAA is down and nothing is cached', async () => {
 		routes['/gauges?bbox'] = () => ({ throws: true });
 		await expect(getForecast('USGS-06043500', 45.4972, -111.2708)).rejects.toBeInstanceOf(ForecastError);
+	});
+
+	it('says which call failed, for the server log', async () => {
+		routes['/gauges?bbox'] = () => ({ status: 503 });
+		await expect(getForecast('USGS-06043500', 45.4972, -111.2708)).rejects.toMatchObject({ detail: expect.stringContaining('api.water.noaa.gov/nwps/v1/gauges HTTP 503') });
 	});
 
 	it('serves the old copy, marked stale, when NOAA fails after the cache expired', async () => {

@@ -13,6 +13,16 @@ import { env } from '#lib/server/env.js';
 const DEFAULT_BASE = 'https://api.waterdata.usgs.gov/ogcapi/v1';
 export const DISCHARGE = '00060'; // cubic feet per second
 export const STAGE = '00065'; // gauge height, feet
+/** Other readings many gauges report. USGS parameter codes; `extra` on a reading is keyed by these. */
+export const TEMP = '00010'; // water temperature, degrees C
+export const COND = '00095'; // specific conductance, uS/cm
+export const DISSOLVED_O2 = '00300'; // dissolved oxygen, mg/L
+export const PH = '00400'; // pH
+export const TURBIDITY = '63680'; // turbidity, FNU
+export const EXTRA_PARAMS = [TEMP, COND, DISSOLVED_O2, PH, TURBIDITY] as const;
+export type ExtraParam = (typeof EXTRA_PARAMS)[number];
+export type SeriesParam = typeof DISCHARGE | typeof STAGE | ExtraParam;
+export const SERIES_PARAMS: readonly string[] = [DISCHARGE, STAGE, ...EXTRA_PARAMS];
 
 export const SEARCH_LIMIT = 500;
 const CHUNK = 100; // ids per request (URL stays ~2 KB)
@@ -52,9 +62,11 @@ export interface Reading {
 export interface Latest {
 	discharge: Reading | null;
 	stage: Reading | null;
+	/** Water temperature, conductance, dissolved oxygen, pH, turbidity: only those the gauge reports. */
+	extra?: Partial<Record<ExtraParam, Reading>>;
 }
 export interface Series {
-	param: typeof DISCHARGE | typeof STAGE;
+	param: SeriesParam;
 	points: [number, number][]; // [epoch ms, value], ascending
 }
 export type Trend = 'rising' | 'falling' | 'steady';
@@ -282,10 +294,16 @@ function parseLatest(features: any[]): Map<string, Latest> {
 		const value = num(p?.value);
 		if (typeof id !== 'string' || value === null || typeof p?.time !== 'string') continue;
 		const cur = out.get(id) ?? { discharge: null, stage: null };
-		const key = p.parameter_code === DISCHARGE ? 'discharge' : p.parameter_code === STAGE ? 'stage' : null;
-		if (!key) continue;
-		const existing = cur[key];
-		if (!existing || Date.parse(p.time) > Date.parse(existing.time)) cur[key] = { value, time: p.time };
+		const code = p.parameter_code as string;
+		if (code === DISCHARGE || code === STAGE) {
+			const key = code === DISCHARGE ? 'discharge' : 'stage';
+			const existing = cur[key];
+			if (!existing || Date.parse(p.time) > Date.parse(existing.time)) cur[key] = { value, time: p.time };
+		} else if ((EXTRA_PARAMS as readonly string[]).includes(code)) {
+			const extra = (cur.extra ??= {});
+			const existing = extra[code as ExtraParam];
+			if (!existing || Date.parse(p.time) > Date.parse(existing.time)) extra[code as ExtraParam] = { value, time: p.time };
+		} else continue;
 		out.set(id, cur);
 	}
 	return out;
@@ -308,9 +326,9 @@ export async function getLatest(ids: string[]): Promise<{ data: Map<string, Late
 			const body = await once(`latest|${chunk.join(',')}`, () =>
 				usgsGet('collections/latest-continuous/items', {
 					monitoring_location_id: chunk.join(','),
-					parameter_code: `${DISCHARGE},${STAGE}`,
+					parameter_code: [DISCHARGE, STAGE, ...EXTRA_PARAMS].join(','),
 					properties: 'monitoring_location_id,parameter_code,value,time',
-					limit: chunk.length * 4
+					limit: chunk.length * 10
 				})
 			);
 			const parsed = parseLatest(body?.features ?? []);
@@ -418,12 +436,33 @@ export async function getSeries(ids: string[], hours = 24): Promise<{ data: Map<
 /** Hour windows the history chart offers. */
 export const HISTORY_HOURS = [24, 48, 72, 168] as const;
 
+/** A single parameter's points for one site (>= 3 readings), or null. */
+function parseParamSeries(features: any[], siteId: string, param: string, max: number): Series | null {
+	const pts: [number, number][] = [];
+	for (const f of features) {
+		const p = f?.properties;
+		const v = num(p?.value);
+		const t = Date.parse(p?.time);
+		if (p?.monitoring_location_id !== siteId || p?.parameter_code !== param || v === null || !Number.isFinite(t)) continue;
+		pts.push([t, v]);
+	}
+	if (pts.length < 3) return null;
+	pts.sort((a, b) => a[0] - b[0]);
+	return { param: param as SeriesParam, points: downsample(pts, max) };
+}
+
 /**
- * History for one site over `hours` (24/48/72/168): discharge, else stage. Cached per site and window
- * (10 min); a failed refresh serves the older copy. Throws UsgsError only when there is nothing to show.
+ * History for one site over `hours` (24/48/72/168). `param` picks one reading (flow, stage, water
+ * temperature, ...); without it: discharge, else stage. Cached per site, window and parameter (10 min);
+ * a failed refresh serves the older copy. Throws UsgsError only when there is nothing to show.
  */
-export async function getRangeSeries(siteId: string, hours: number): Promise<{ series: Series | null; stale: boolean }> {
-	const key = `${siteId}|${hours}`;
+export async function getRangeSeries(
+	siteId: string,
+	hours: number,
+	param?: string
+): Promise<{ series: Series | null; stale: boolean }> {
+	if (param !== undefined && !SERIES_PARAMS.includes(param)) return { series: null, stale: false };
+	const key = `${siteId}|${hours}|${param ?? ''}`;
 	const hit = rangeCache.get(key);
 	if (hit?.fresh) return { series: hit.v, stale: false };
 	try {
@@ -433,14 +472,16 @@ export async function getRangeSeries(siteId: string, hours: number): Promise<{ s
 		const body = await once(`range|${key}`, () =>
 			usgsGet('collections/continuous/items', {
 				monitoring_location_id: siteId,
-				parameter_code: `${DISCHARGE},${STAGE}`,
+				parameter_code: param ?? `${DISCHARGE},${STAGE}`,
 				time: `${iso(start)}/${iso(end)}`,
 				properties: 'monitoring_location_id,parameter_code,time,value',
-				// sites report every 5-15 min for up to two parameters; stay well above a week of 5-min data
-				limit: hours * 12 * 2 + 100
+				// sites report every 5-15 min; stay well above a week of 5-min data per parameter
+				limit: hours * 12 * (param ? 1 : 2) + 100
 			})
 		);
-		const v = parseSeries(body?.features ?? [], MAX_RANGE_POINTS).get(siteId) ?? null;
+		const v = param
+			? parseParamSeries(body?.features ?? [], siteId, param, MAX_RANGE_POINTS)
+			: (parseSeries(body?.features ?? [], MAX_RANGE_POINTS).get(siteId) ?? null);
 		rangeCache.set(key, v);
 		return { series: v, stale: false };
 	} catch (e) {

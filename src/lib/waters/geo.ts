@@ -126,3 +126,104 @@ export function nearestIndex(xs: number[], f: number): number {
 	for (let i = 0; i < xs.length; i++) { const v = Math.abs(xs[i] - f); if (v < d) { d = v; best = i; } }
 	return best;
 }
+
+// ── Readings the app can show and chart ─────────────────────────────────────────
+
+export interface Metric {
+	key: 'discharge' | 'stage' | 'temp' | 'cond' | 'do' | 'ph' | 'turb';
+	param: string; // USGS parameter code
+	label: 'watersFlow' | 'watersStage' | 'watersTemp' | 'watersCond' | 'watersDO' | 'watersPH' | 'watersTurb';
+	unit: string;
+	decimals: number;
+	/** Convert the USGS value for display (water temperature arrives in °C). */
+	convert?: (v: number) => number;
+	/** Whether NOAA forecasts this reading (flow and stage only). */
+	forecastable: boolean;
+}
+
+export const cToF = (c: number) => (c * 9) / 5 + 32;
+
+export const METRICS: readonly Metric[] = [
+	{ key: 'discharge', param: '00060', label: 'watersFlow', unit: 'cfs', decimals: 0, forecastable: true },
+	{ key: 'stage', param: '00065', label: 'watersStage', unit: 'ft', decimals: 2, forecastable: true },
+	{ key: 'temp', param: '00010', label: 'watersTemp', unit: '°F', decimals: 1, convert: cToF, forecastable: false },
+	{ key: 'cond', param: '00095', label: 'watersCond', unit: 'µS/cm', decimals: 0, forecastable: false },
+	{ key: 'do', param: '00300', label: 'watersDO', unit: 'mg/L', decimals: 1, forecastable: false },
+	{ key: 'ph', param: '00400', label: 'watersPH', unit: 'pH', decimals: 1, forecastable: false },
+	{ key: 'turb', param: '63680', label: 'watersTurb', unit: 'FNU', decimals: 1, forecastable: false }
+];
+
+type LatestLike = {
+	discharge: { value: number; time: string } | null;
+	stage: { value: number; time: string } | null;
+	extra?: Partial<Record<string, { value: number; time: string }>>;
+} | null | undefined;
+
+/** The latest reading for a metric, in display units, or null if the gauge doesn't report it. */
+export function readingOf(latest: LatestLike, m: Metric): { value: number; time: string } | null {
+	const r = m.key === 'discharge' ? latest?.discharge : m.key === 'stage' ? latest?.stage : latest?.extra?.[m.param];
+	return r ? { value: m.convert ? m.convert(r.value) : r.value, time: r.time } : null;
+}
+
+/** Metrics a gauge reports right now, in display order. */
+export function availableMetrics(latest: LatestLike): Metric[] {
+	return METRICS.filter((m) => readingOf(latest, m) !== null);
+}
+
+export const formatValue = (v: number, m: Pick<Metric, 'decimals'>) =>
+	m.decimals === 0 ? Math.round(v).toLocaleString() : v.toFixed(m.decimals);
+
+// ── History + forecast on one chart ─────────────────────────────────────────────
+
+export interface DualPoint {
+	x: number; // 0..1 across the chart
+	y: number; // 0..1 down the chart (0 = top)
+	t: number;
+	v: number;
+	forecast: boolean;
+}
+
+export interface DualGeometry {
+	histLine: string;
+	histArea: string;
+	fcLine: string;
+	fcArea: string;
+	nowX: number | null; // where "now" falls, when both halves are drawn
+	min: number;
+	max: number;
+	t0: number;
+	t1: number;
+	points: DualPoint[];
+}
+
+/**
+ * Lay a history series and a forecast series on one time axis (solid, then dashed from the last observed
+ * point). Forecast points that fall inside the history are dropped so the two never overlap.
+ */
+export function dualGeometry(history: [number, number][], forecast: [number, number][], W = 300, H = 110, pad = 6): DualGeometry | null {
+	const lastHist = history.length ? history[history.length - 1][0] : -Infinity;
+	const fc = forecast.filter((p) => p[0] > lastHist);
+	if (history.length + fc.length < 2) return null;
+	const all = [...history, ...fc];
+	const t0 = all[0][0], t1 = all[all.length - 1][0];
+	let min = Infinity, max = -Infinity;
+	for (const p of all) { if (p[1] < min) min = p[1]; if (p[1] > max) max = p[1]; }
+	const lo = min === max ? min - 1 : min, hi = min === max ? max + 1 : max;
+	const fx = (t: number) => (t1 === t0 ? 0.5 : (t - t0) / (t1 - t0));
+	const fy = (v: number) => (H - pad - ((v - lo) / (hi - lo)) * (H - pad * 2)) / H;
+	const path = (pts: [number, number][]) => pts.map((p, i) => `${i ? 'L' : 'M'}${(fx(p[0]) * W).toFixed(1)},${(fy(p[1]) * H).toFixed(1)}`).join('');
+	const area = (pts: [number, number][]) => (pts.length < 2 ? '' : `${path(pts)}L${(fx(pts[pts.length - 1][0]) * W).toFixed(1)},${H}L${(fx(pts[0][0]) * W).toFixed(1)},${H}Z`);
+	const seam: [number, number][] = history.length && fc.length ? [history[history.length - 1], ...fc] : fc;
+	return {
+		histLine: history.length >= 2 ? path(history) : '',
+		histArea: area(history),
+		fcLine: seam.length >= 2 ? path(seam) : '',
+		fcArea: area(seam),
+		nowX: history.length && fc.length ? fx(lastHist) : null,
+		min, max, t0, t1,
+		points: [
+			...history.map((p) => ({ x: fx(p[0]), y: fy(p[1]), t: p[0], v: p[1], forecast: false })),
+			...fc.map((p) => ({ x: fx(p[0]), y: fy(p[1]), t: p[0], v: p[1], forecast: true }))
+		]
+	};
+}

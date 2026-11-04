@@ -319,6 +319,40 @@ describe('getRangeSeries', () => {
 	});
 });
 
+describe('extra readings (water temperature and friends)', () => {
+	it('getLatest asks for the extra parameters and returns only the ones the gauge reports', async () => {
+		handler = () => ok([
+			row('USGS-A0000001', '00060', 88, iso(60_000)), row('USGS-A0000001', '00065', 1.5, iso(60_000)),
+			row('USGS-A0000001', '00010', 13.5, iso(120_000)), row('USGS-A0000001', '00400', 8.1, iso(120_000)),
+			row('USGS-B0000002', '00060', 5, iso(60_000))
+		]);
+		const { data } = await u.getLatest(['USGS-A0000001', 'USGS-B0000002']);
+		const codes = calls[0].searchParams.get('parameter_code')!.split(',');
+		expect(codes).toEqual(expect.arrayContaining(['00060', '00065', '00010', '00095', '00300', '00400', '63680']));
+		expect(data.get('USGS-A0000001')!.extra).toEqual({ '00010': { value: 13.5, time: expect.any(String) }, '00400': { value: 8.1, time: expect.any(String) } });
+		expect(data.get('USGS-B0000002')!.extra).toBeUndefined();
+	});
+
+	it('getRangeSeries returns one named parameter, and rejects unknown ones without a request', async () => {
+		handler = () => ok(Array.from({ length: 10 }, (_, i) => row('USGS-A0000001', '00010', 10 + i / 10, iso((10 - i) * 900_000))));
+		const r = await u.getRangeSeries('USGS-A0000001', 48, '00010');
+		expect(calls[0].searchParams.get('parameter_code')).toBe('00010');
+		expect(r.series).toMatchObject({ param: '00010' });
+		expect(r.series!.points).toHaveLength(10);
+		expect((await u.getRangeSeries('USGS-A0000001', 48, '99999')).series).toBeNull();
+		expect(calls).toHaveLength(1);
+	});
+
+	it('caches each parameter separately', async () => {
+		handler = () => ok(Array.from({ length: 5 }, (_, i) => row('USGS-A0000001', '00010', 10 + i, iso((5 - i) * 900_000))));
+		await u.getRangeSeries('USGS-A0000001', 24, '00010');
+		await u.getRangeSeries('USGS-A0000001', 24, '00010');
+		expect(calls.length).toBe(1);
+		await u.getRangeSeries('USGS-A0000001', 24, '00300');
+		expect(calls.length).toBe(2);
+	});
+});
+
 describe('trendOf', () => {
 	const series = (vals: number[], param: '00060' | '00065' = '00060') => ({
 		param,

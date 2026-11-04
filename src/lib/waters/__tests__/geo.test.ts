@@ -107,3 +107,60 @@ describe('chartGeometry', () => {
 	});
 	it('finds the nearest point', () => expect(nearestIndex([0, 0.5, 1], 0.6)).toBe(1));
 });
+
+import { availableMetrics, readingOf, METRICS, cToF, formatValue, dualGeometry } from '../geo';
+
+describe('metrics', () => {
+	const latest = {
+		discharge: { value: 87.8, time: 't' },
+		stage: { value: 1.48, time: 't' },
+		extra: { '00010': { value: 13.5, time: 't' }, '00400': { value: 8.1, time: 't' } }
+	};
+	it('converts water temperature to °F', () => {
+		expect(cToF(0)).toBe(32);
+		expect(cToF(13.5)).toBeCloseTo(56.3, 5);
+		expect(readingOf(latest, METRICS.find((m) => m.key === 'temp')!)!.value).toBeCloseTo(56.3, 5);
+	});
+	it('lists only the readings a gauge has, in display order', () => {
+		expect(availableMetrics(latest).map((m) => m.key)).toEqual(['discharge', 'stage', 'temp', 'ph']);
+		expect(availableMetrics({ discharge: null, stage: { value: 1, time: 't' } }).map((m) => m.key)).toEqual(['stage']);
+		expect(availableMetrics(null)).toEqual([]);
+	});
+	it('only flow and stage are forecastable', () => {
+		expect(METRICS.filter((m) => m.forecastable).map((m) => m.key)).toEqual(['discharge', 'stage']);
+	});
+	it('formats with the metric precision', () => {
+		expect(formatValue(1234.6, { decimals: 0 })).toBe((1235).toLocaleString());
+		expect(formatValue(1.5, { decimals: 2 })).toBe('1.50');
+	});
+});
+
+describe('dualGeometry', () => {
+	const H = 3600_000, now = 1_000_000_000_000;
+	const hist: [number, number][] = [[now - 48 * H, 10], [now - 24 * H, 20], [now, 15]];
+	const fc: [number, number][] = [[now + 12 * H, 18], [now + 24 * H, 30]];
+	it('puts history then forecast on one axis with "now" between them', () => {
+		const g = dualGeometry(hist, fc)!;
+		expect(g.t0).toBe(now - 48 * H); expect(g.t1).toBe(now + 24 * H);
+		expect(g.nowX).toBeCloseTo(48 / 72, 6);
+		expect(g.max).toBe(30);
+		expect(g.points.map((p) => p.forecast)).toEqual([false, false, false, true, true]);
+		expect(g.fcLine.startsWith('M')).toBe(true);
+		expect(g.fcLine.split('L').length).toBe(3); // seam point + 2 forecast points
+	});
+	it('draws history alone, or forecast alone, without a "now" marker', () => {
+		const h = dualGeometry(hist, [])!;
+		expect(h.nowX).toBeNull(); expect(h.fcLine).toBe('');
+		const f = dualGeometry([], fc)!;
+		expect(f.nowX).toBeNull(); expect(f.histLine).toBe(''); expect(f.fcLine).not.toBe('');
+	});
+	it('drops forecast points that overlap the history', () => {
+		const g = dualGeometry(hist, [[now - 1 * H, 99], ...fc])!;
+		expect(g.points.filter((p) => p.forecast)).toHaveLength(2);
+		expect(g.max).toBe(30);
+	});
+	it('needs at least two points in total, and survives a flat series', () => {
+		expect(dualGeometry([[1, 1]], [])).toBeNull();
+		expect(dualGeometry([[1, 5], [2, 5]], [])!.points.every((p) => Number.isFinite(p.y))).toBe(true);
+	});
+});

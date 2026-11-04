@@ -245,7 +245,7 @@ describe('GET /api/waters/:id/history and /forecast', () => {
 		mockRange.mockResolvedValue({ series: { param: '00060', points: [[1, 2]] }, stale: false });
 		const res = await call(history, A, id, `hours=${h}`);
 		expect(res.status).toBe(200);
-		expect(mockRange).toHaveBeenCalledWith('USGS-06000001', h);
+		expect(mockRange).toHaveBeenCalledWith('USGS-06000001', h, undefined);
 		expect(await res.json()).toMatchObject({ hours: h, series: { param: '00060' }, stale: false });
 	});
 
@@ -259,6 +259,20 @@ describe('GET /api/waters/:id/history and /forecast', () => {
 		expect(mockForecast).not.toHaveBeenCalled();
 	});
 
+	it.each(['00010', '00065', '00300'])('history passes a supported parameter (%s) through', async (param) => {
+		const id = await follow(A);
+		mockRange.mockResolvedValue({ series: { param, points: [[1, 2]] }, stale: false });
+		const res = await call(history, A, id, `hours=48&param=${param}`);
+		expect(mockRange).toHaveBeenCalledWith('USGS-06000001', 48, param);
+		expect((await res.json()).param).toBe(param);
+	});
+
+	it.each(['99999', 'abc', "00060;drop"])('history rejects an unknown parameter %j', async (param) => {
+		const id = await follow(A);
+		expect((await call(history, A, id, `hours=24&param=${encodeURIComponent(param)}`)).status).toBe(400);
+		expect(mockRange).not.toHaveBeenCalled();
+	});
+
 	it('history maps USGS trouble to 503 / 429', async () => {
 		const id = await follow(A);
 		mockRange.mockRejectedValue(new UsgsError('unavailable'));
@@ -269,7 +283,7 @@ describe('GET /api/waters/:id/history and /forecast', () => {
 
 	it('forecast passes the gauge location, returns the forecast, and is never cached by the browser', async () => {
 		const id = await follow(A);
-		mockForecast.mockResolvedValue({ forecast: { source: 'nws', param: '00060', issuedAt: null, lid: 'X', points: [[1, 2]] }, stale: false });
+		mockForecast.mockResolvedValue({ forecast: { source: 'nws', issuedAt: null, lid: 'X', series: { '00060': [[1, 2]] } }, stale: false });
 		const res = await call(forecastRoute, A, id);
 		expect(mockForecast).toHaveBeenCalledWith('USGS-06000001', 38.5, -91.5);
 		expect(res.headers.get('cache-control')).toContain('no-store');

@@ -55,3 +55,18 @@ export function addWater(g: GaugeView) {
 export function removeWater(id: string) {
 	waters.gauges = waters.gauges.filter((g) => g.id !== id);
 }
+
+// ── Politeness for NOAA: tiles ask for their forecast at most two at a time ─────
+
+let running = 0;
+const waiting: (() => void)[] = [];
+export async function queued<T>(fn: () => Promise<T>, max = 2): Promise<T> {
+	if (running >= max) await new Promise<void>((resolve) => waiting.push(resolve));
+	running++;
+	try {
+		return await fn();
+	} finally {
+		running--;
+		waiting.shift()?.();
+	}
+}
