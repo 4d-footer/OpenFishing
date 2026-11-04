@@ -44,6 +44,19 @@ describe('oidcEnabled', () => {
 		delete mockEnv.ADMIN_PASSWORD;
 		expect(oidc.oidcEnabled()).toBe(false);
 	});
+	it.each(['false', 'FALSE', ' 0 ', 'no', 'off'])('is off when OIDC_ENABLED=%s even if fully configured', (v) => {
+		mockEnv.OIDC_ENABLED = v;
+		expect(oidc.oidcEnabled()).toBe(false);
+	});
+	it.each(['true', '', '1', 'yes'])('stays on when OIDC_ENABLED=%j', (v) => {
+		mockEnv.OIDC_ENABLED = v;
+		expect(oidc.oidcEnabled()).toBe(true);
+	});
+	it('does not turn OIDC on by itself', () => {
+		delete mockEnv.OIDC_ISSUER;
+		mockEnv.OIDC_ENABLED = 'true';
+		expect(oidc.oidcEnabled()).toBe(false);
+	});
 	it.each(['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET'])('is off without %s', (k) => {
 		delete mockEnv[k];
 		expect(oidc.oidcEnabled()).toBe(false);

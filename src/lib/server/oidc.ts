@@ -22,12 +22,18 @@ export class OidcLoginError extends Error {
 	}
 }
 
+/** OIDC_ENABLED=false (or 0/no/off) switches OIDC off without removing the other OIDC_* settings. */
+function oidcSwitchedOff(): boolean {
+	return ['false', '0', 'no', 'off'].includes((env.OIDC_ENABLED ?? '').trim().toLowerCase());
+}
+
 /**
  * OIDC is on when an issuer, client id and secret are set *and* multi-user auth is enabled —
  * sessions are signed with the admin password, so OIDC can't exist in open mode.
+ * OIDC_ENABLED=false turns it off regardless.
  */
 export function oidcEnabled(): boolean {
-	return authEnabled() && !!env.OIDC_ISSUER && !!env.OIDC_CLIENT_ID && !!env.OIDC_CLIENT_SECRET;
+	return !oidcSwitchedOff() && authEnabled() && !!env.OIDC_ISSUER && !!env.OIDC_CLIENT_ID && !!env.OIDC_CLIENT_SECRET;
 }
 
 export function oidcProviderName(): string {

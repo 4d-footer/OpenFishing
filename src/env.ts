@@ -24,6 +24,7 @@ export const variables = defineEnvVars({
 	AUTH_PASSWORD: optional('Deprecated fallback name for ADMIN_PASSWORD'),
 
 	OIDC_ISSUER: optional('OIDC issuer URL (enables "Sign in with OIDC"; requires ADMIN_PASSWORD)'),
+	OIDC_ENABLED: optional('Set to "false" to turn OIDC login off while keeping the other OIDC_* settings (default: on when they are set)'),
 	OIDC_CLIENT_ID: optional('OIDC client ID'),
 	OIDC_CLIENT_SECRET: optional('OIDC client secret'),
 	OIDC_SCOPES: optional('Space-separated OIDC scopes (default: "openid profile email")'),
