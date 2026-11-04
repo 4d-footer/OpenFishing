@@ -137,10 +137,12 @@ export const MARKER_COLOR: Record<MarkerStatus, string> = { good: '#22c55e', ste
 
 /**
  * Map marker colour: the user's criteria win when they have any that can be checked (met = green, unmet = red).
- * Otherwise a gauge follows its trend (rising green, steady yellow, falling red); a lake with nothing to judge by
- * stays the neutral accent colour.
+
+ * Otherwise a gauge follows its trend (rising green, steady yellow, falling red). A water with no gauge (a lake,
+ * reservoir or pond) always stays the neutral accent colour: it has no flow to judge.
  */
-export function markerStatus(rules: AlertRules | null | undefined, ctx: AlertContext, trend: 'rising' | 'falling' | 'steady' | null): MarkerStatus {
+export function markerStatus(rules: AlertRules | null | undefined, ctx: AlertContext, trend: 'rising' | 'falling' | 'steady' | null, hasGauge = true): MarkerStatus {
+	if (!hasGauge) return 'unknown';
 	const e = evaluate(rules, ctx);
 	if (e.status === 'met') return 'good';
 	if (e.status === 'unmet') return 'bad';

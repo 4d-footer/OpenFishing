@@ -3,7 +3,7 @@
 	import type { GaugeView } from '#lib/server/waters.js';
 	import type { Weather } from '#lib/server/weather.js';
 	import { splitHourly, WEATHER_METRICS } from '#lib/waters/geo.js';
-	import { compass, PRESSURE_ARROW } from '#lib/waters/weather.js';
+	import { compass } from '#lib/waters/weather.js';
 	import FlowChart from './FlowChart.svelte';
 	import GaugeThumb from './GaugeThumb.svelte';
 	import WeatherStrip from './WeatherStrip.svelte';
@@ -42,10 +42,14 @@
 				<span style="display:block; font-size:0.72rem; color:var(--of-text-4); margin-top:6px;" data-testid="no-gauge">{t.watersNoGauge}</span>
 			</span>
 		</button>
-		<button type="button" onclick={() => (editing = !editing)} aria-label={t.watersSettings} title={t.watersSettings} aria-expanded={editing} data-testid="tile-menu"
-			style="font-size:1rem; padding:2px 8px; line-height:1.1; border-radius:9px; cursor:pointer; color:{editing || g.alerts ? 'var(--of-accent)' : 'var(--of-text-3)'}; background:transparent; border:1px solid {editing ? 'var(--of-accent)' : 'var(--of-border-subtle)'};">⋮</button>
-		<button type="button" onclick={onremove} disabled={busy} aria-label={t.watersRemove} title={t.watersRemove}
-			style="font-size:0.8rem; padding:3px 9px; line-height:1; border-radius:9px; cursor:pointer; color:var(--of-text-3); background:transparent; border:1px solid var(--of-border-subtle);">✕</button>
+		<div style="flex:none; display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+			<div style="display:flex; gap:6px;">
+				<button type="button" onclick={() => (editing = !editing)} aria-label={t.watersSettings} title={t.watersSettings} aria-expanded={editing} data-testid="tile-menu"
+					style="display:flex; align-items:center; justify-content:center; width:30px; height:26px; padding:0; font-size:0.8rem; line-height:1; border-radius:9px; cursor:pointer; background:transparent; font-weight:700; color:{editing || g.alerts ? 'var(--of-accent)' : 'var(--of-text-3)'}; border:1px solid {editing ? 'var(--of-accent)' : 'var(--of-border-subtle)'};">⋮</button>
+				<button type="button" onclick={onremove} disabled={busy} aria-label={t.watersRemove} title={t.watersRemove}
+					style="display:flex; align-items:center; justify-content:center; width:30px; height:26px; padding:0; font-size:0.8rem; line-height:1; border-radius:9px; cursor:pointer; background:transparent; color:var(--of-text-3); border:1px solid var(--of-border-subtle);">✕</button>
+			</div>
+		</div>
 	</header>
 	</div>
 
@@ -62,9 +66,6 @@
 			{/if}
 			{#if weather.windMph !== null}
 				<div><div style="{rowLabel}">{t.watersWind}</div><div style="font-family:'JetBrains Mono',monospace; font-size:1.1rem; font-weight:600; color:var(--of-text);">{Math.round(weather.windMph)}<span style="font-size:0.75rem; color:var(--of-text-3);"> mph {compass(weather.windDir)}</span></div></div>
-			{/if}
-			{#if weather.pressureTrend}
-				<div style="font-size:0.78rem; font-weight:600; color:{weather.pressureTrend === 'falling' ? 'var(--of-accent)' : 'var(--of-text-3)'};">{PRESSURE_ARROW[weather.pressureTrend]} {t.watersPressure}</div>
 			{/if}
 		</div>
 		<div style="margin-top:4px; font-size:0.7rem; color:var(--of-text-4);">{t.watersUpdated} {new Date(weather.time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>

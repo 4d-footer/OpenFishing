@@ -86,10 +86,11 @@ describe('contextOf + markerStatus', () => {
 		expect(markerStatus(r, { flow: 200 }, 'falling')).toBe('good');
 		expect(markerStatus(r, {}, 'steady')).toBe('steady'); // nothing to check: back to the trend
 	});
-	it('a lake is judged by weather criteria, or stays neutral', () => {
-		expect(markerStatus({ airTemp: { min: 50 } }, { weather: { tempF: 60, windMph: 1, code: 0 } }, null)).toBe('good');
-		expect(markerStatus({ airTemp: { min: 50 } }, { weather: { tempF: 40, windMph: 1, code: 0 } }, null)).toBe('bad');
-		expect(markerStatus(null, { weather: { tempF: 40, windMph: 1, code: 0 } }, null)).toBe('unknown');
+	it('a water with no gauge always stays neutral, whatever its weather criteria say', () => {
+		const ctx = { weather: { tempF: 60, windMph: 1, code: 0 } };
+		expect(markerStatus({ airTemp: { min: 50 } }, ctx, null, false)).toBe('unknown');
+		expect(markerStatus({ airTemp: { min: 90 } }, ctx, null, false)).toBe('unknown');
+		expect(markerStatus(null, ctx, 'rising', false)).toBe('unknown');
 		expect(MARKER_COLOR.good).toMatch(/^#/);
 	});
 });

@@ -56,6 +56,7 @@
 		h === 24 ? t.watersRange24 : h === 48 ? t.watersRange48 : h === 72 ? t.watersRange72 : h === 168 ? t.watersRange168 : t.watersForecastAll;
 	const fmtTime = (ms: number | string) => new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 	const trendLabel = (tr: string | null) => (tr === 'rising' ? t.watersRising : tr === 'falling' ? t.watersFalling : tr === 'steady' ? t.watersSteady : '');
+	const TREND_COLOR = { rising: '#22c55e', steady: '#eab308', falling: '#ef4444' } as const;
 	const trendArrow = (tr: string | null) => (tr === 'rising' ? '▲' : tr === 'falling' ? '▼' : tr === 'steady' ? '►' : '');
 
 	const flow = $derived(readingOf(g.latest, METRICS[0]));
@@ -148,10 +149,17 @@
 				<span style="display:block; font-size:0.72rem; color:var(--of-text-4); margin-top:2px;">{g.river ?? ''}{g.state ? ` · ${g.state}` : ''}</span>
 			</span>
 		</button>
-		<button type="button" onclick={() => (editing = !editing)} aria-label={t.watersSettings} title={t.watersSettings} aria-expanded={editing} data-testid="tile-menu"
-			style="font-size:1rem; padding:2px 8px; line-height:1.1; border-radius:9px; cursor:pointer; color:{editing || g.alerts ? 'var(--of-accent)' : 'var(--of-text-3)'}; background:transparent; border:1px solid {editing ? 'var(--of-accent)' : 'var(--of-border-subtle)'};">⋮</button>
-		<button type="button" onclick={onremove} disabled={busy} aria-label={t.watersRemove} title={t.watersRemove}
-			style="font-size:0.8rem; padding:3px 9px; line-height:1; border-radius:9px; cursor:pointer; color:var(--of-text-3); background:transparent; border:1px solid var(--of-border-subtle);">✕</button>
+		<div style="flex:none; display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+			<div style="display:flex; gap:6px;">
+				<button type="button" onclick={() => (editing = !editing)} aria-label={t.watersSettings} title={t.watersSettings} aria-expanded={editing} data-testid="tile-menu"
+					style="display:flex; align-items:center; justify-content:center; width:30px; height:26px; padding:0; font-size:0.8rem; line-height:1; border-radius:9px; cursor:pointer; background:transparent; font-weight:700; color:{editing || g.alerts ? 'var(--of-accent)' : 'var(--of-text-3)'}; border:1px solid {editing ? 'var(--of-accent)' : 'var(--of-border-subtle)'};">⋮</button>
+				<button type="button" onclick={onremove} disabled={busy} aria-label={t.watersRemove} title={t.watersRemove}
+					style="display:flex; align-items:center; justify-content:center; width:30px; height:26px; padding:0; font-size:0.8rem; line-height:1; border-radius:9px; cursor:pointer; background:transparent; color:var(--of-text-3); border:1px solid var(--of-border-subtle);">✕</button>
+			</div>
+			{#if g.trend}
+				<div data-testid="trend" data-trend={g.trend} style="font-size:0.72rem; font-weight:600; white-space:nowrap; color:{TREND_COLOR[g.trend]};">{trendArrow(g.trend)} {trendLabel(g.trend)}</div>
+			{/if}
+		</div>
 	</header>
 	{#if g.usgsUrl}<a href={g.usgsUrl} target="_blank" rel="noopener noreferrer" style="display:inline-block; margin:6px 0 0 96px; font-size:0.72rem; color:var(--of-text-3);">{t.watersViewUsgs} ↗</a>{/if}
 	</div>
@@ -182,9 +190,6 @@
 					<div style="{rowLabel}">{t.watersTemp}</div>
 					<div style="font-family:'JetBrains Mono',monospace; font-size:{flow || stage ? '1.1rem' : '1.5rem'}; font-weight:600; color:var(--of-text);">{formatValue(temp.value, METRICS[2])}<span style="font-size:0.75rem; color:var(--of-text-3);"> °F</span></div>
 				</div>
-			{/if}
-			{#if g.trend}
-				<div style="font-size:0.78rem; font-weight:600; color:{g.trend === 'rising' ? 'var(--of-accent)' : 'var(--of-text-3)'};">{trendArrow(g.trend)} {trendLabel(g.trend)}</div>
 			{/if}
 		</div>
 		{#if others.length}

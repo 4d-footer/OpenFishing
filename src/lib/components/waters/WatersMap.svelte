@@ -69,7 +69,7 @@
 			const on = g.id === selectedId;
 			const size = on ? 24 : 18;
 			const icon = L.divIcon({
-				html: `<span style="display:block; width:${size}px; height:${size}px; border-radius:${g.kind === 'gauge' ? '50%' : '5px'}; background:${MARKER_COLOR[markerStatus(g.alerts, contextOf(g.latest, waters.weather[g.id] ?? null), g.trend)]}; border:3px solid #fff; box-shadow:0 0 0 ${on ? 3 : 1}px ${on ? 'var(--of-accent-solid)' : 'rgba(0,0,0,.5)'}, 0 2px 5px rgba(0,0,0,.4);"></span>`,
+				html: `<span style="display:block; width:${size}px; height:${size}px; border-radius:${g.kind === 'gauge' ? '50%' : '5px'}; background:${MARKER_COLOR[markerStatus(g.alerts, contextOf(g.latest, waters.weather[g.id] ?? null), g.trend, g.kind === 'gauge')]}; border:3px solid #fff; box-shadow:0 0 0 ${on ? 3 : 1}px ${on ? 'var(--of-accent-solid)' : 'rgba(0,0,0,.5)'}, 0 2px 5px rgba(0,0,0,.4);"></span>`,
 				className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2]
 			});
 			L.marker([g.lat, g.lng], { icon, keyboard: true, title: g.name, zIndexOffset: on ? 1000 : 0 })
