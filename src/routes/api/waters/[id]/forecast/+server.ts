@@ -12,9 +12,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		.from(waterGauge)
 		.where(and(eq(waterGauge.id, params.id), userFilter(locals, waterGauge.userId)));
 	if (!row) return Response.json({ error: 'not_found' }, { status: 404 });
+	if (!row.siteId.startsWith('USGS-')) return Response.json({ forecast: null, alternate: null, stale: false }); // a lake has no gauge
 	try {
-		const { forecast, stale } = await getForecast(row.siteId, row.lat, row.lng);
-		return Response.json({ forecast, stale }, { headers: { 'cache-control': 'private, no-store' } });
+		const { forecast, alternate, stale } = await getForecast(row.siteId, row.lat, row.lng);
+		return Response.json({ forecast, alternate, stale }, { headers: { 'cache-control': 'private, no-store' } });
 	} catch (e) {
 		if (e instanceof ForecastError) {
 			console.warn(`[waters] forecast for ${row.siteId} unavailable: ${e.detail || 'unknown'}`);

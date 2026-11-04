@@ -16,6 +16,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		.from(waterGauge)
 		.where(and(eq(waterGauge.id, params.id), userFilter(locals, waterGauge.userId)));
 	if (!row) return Response.json({ error: 'not_found' }, { status: 404 });
+	if (!row.siteId.startsWith('USGS-')) return Response.json({ hours, param: param ?? null, series: null, stale: false }); // a lake has no gauge
 	try {
 		const { series, stale } = await getRangeSeries(row.siteId, hours, param);
 		return Response.json({ hours, param: param ?? null, series, stale }, { headers: { 'cache-control': 'private, no-store' } });

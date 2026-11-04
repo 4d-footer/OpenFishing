@@ -19,6 +19,7 @@
 	let hover = $state<number | null>(null);
 
 	const fmt = (v: number) => `${formatValue(v, metric)} ${metric.unit}`;
+	const tick = (v: number) => (g ? v.toLocaleString(undefined, { minimumFractionDigits: g.tickDecimals, maximumFractionDigits: g.tickDecimals }) : String(v));
 	const fmtTime = (ms: number) => new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 	const fmtDay = (ms: number) => new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric' });
 
@@ -40,7 +41,11 @@
 			{/if}
 		</div>
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div style="position:relative; touch-action:pan-y;" onpointermove={move} onpointerleave={() => (hover = null)}>
+		<div style="position:relative; touch-action:pan-y; margin-left:44px;" data-testid="chart-plot" onpointermove={move} onpointerleave={() => (hover = null)}>
+			{#each g.ticks as tk (tk.v)}
+				<div data-testid="y-tick" style="position:absolute; left:0; right:0; top:{tk.y * 100}%; border-top:1px solid var(--of-border-subtle); opacity:0.6; pointer-events:none;"></div>
+				<span style="position:absolute; right:100%; margin-right:6px; top:{tk.y * 100}%; transform:translateY(-50%); font-size:0.62rem; color:var(--of-text-4); font-family:'JetBrains Mono',monospace; white-space:nowrap; pointer-events:none;">{tick(tk.v)}</span>
+			{/each}
 			<svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img" aria-label={t[metric.label]} style="width:100%; height:{H}px; display:block;">
 				{#if g.histArea}<path d={g.histArea} fill="var(--of-accent-glow)" />{/if}
 				{#if g.histLine}<path d={g.histLine} fill="none" stroke="var(--of-accent)" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round" />{/if}
@@ -55,7 +60,7 @@
 				<div style="position:absolute; left:{hp.x * 100}%; top:{hp.y * 100}%; width:9px; height:9px; margin:-4.5px 0 0 -4.5px; border-radius:50%; background:var(--of-accent); border:2px solid var(--of-bg-surface); pointer-events:none;"></div>
 			{/if}
 		</div>
-		<div style="position:relative; height:1.1em; font-size:0.66rem; color:var(--of-text-4); margin-top:3px;">
+		<div style="position:relative; height:1.1em; font-size:0.66rem; color:var(--of-text-4); margin:3px 0 0 44px;">
 			<span style="position:absolute; left:0;">{fmtDay(g.t0)}</span>
 			{#if g.nowX !== null && g.nowX > 0.15 && g.nowX < 0.85}
 				<span style="position:absolute; left:{g.nowX * 100}%; transform:translateX(-50%); color:var(--of-text-3);">{t.watersNow}</span>

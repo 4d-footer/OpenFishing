@@ -3,6 +3,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import type { Translations } from '#lib/i18n/index.js';
 	import type { GaugeView } from '#lib/server/waters.js';
+	import { waters } from '#lib/stores/waters.svelte.js';
+	import { condition } from '#lib/waters/weather.js';
 	import { bufferBounds, framingBounds, METRICS, readingOf, formatValue, TOPO_TILE_URL, TOPO_ATTRIBUTION, TOPO_MAX_ZOOM } from '#lib/waters/geo.js';
 
 	let {
@@ -28,15 +30,21 @@
 
 	function tooltip(g: GaugeView): string {
 		const rows: string[] = [];
+		const w = waters.weather[g.id];
+		const wc = w ? condition(w.code, w.isDay) : null;
 		for (const m of METRICS.slice(0, 3)) {
 			const r = readingOf(g.latest, m);
 			if (r) rows.push(`${esc(t[m.label])}: <b>${formatValue(r.value, m)} ${esc(m.unit)}</b>`);
 		}
-		if (!rows.length) rows.push(esc(t.watersNoReading));
+		if (!rows.length && g.kind === 'gauge') rows.push(esc(t.watersNoReading));
 		if (g.trend) rows.push(`${trendArrow(g.trend)} ${esc(trendLabel(g.trend))}`);
+		if (w && wc) {
+			const wind = w.windMph !== null ? ` · ${Math.round(w.windMph)} mph` : '';
+			rows.push(`${wc.icon} <b>${w.tempF !== null ? Math.round(w.tempF) + '°F' : ''}</b> ${esc(t[wc.key])}${wind}`);
+		}
 		const when = g.latest?.discharge?.time ?? g.latest?.stage?.time ?? g.latest?.extra?.['00010']?.time;
 		if (when) rows.push(`<span style="opacity:.7">${esc(t.watersUpdated)} ${esc(new Date(when).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</span>`);
-		return `<div style="font-size:12px; line-height:1.45;"><b>${esc(g.name)}</b><br>${esc(g.river ?? '')}${g.state ? ' · ' + esc(g.state) : ''}<br>${rows.join('<br>')}</div>`;
+		return `<div style="font-size:12px; line-height:1.45;"><b>${esc(g.name)}</b><br>${esc(g.kind === 'gauge' ? (g.river ?? '') : g.kind === 'reservoir' ? t.watersKindReservoir : g.kind === 'pond' ? t.watersKindPond : t.watersKindLake)}${g.state ? ' · ' + esc(g.state) : ''}<br>${rows.join('<br>')}</div>`;
 	}
 
 	const placed = () => gauges.filter((g) => g.lat !== null && g.lng !== null);
@@ -57,7 +65,7 @@
 			const on = g.id === selectedId;
 			const size = on ? 24 : 18;
 			const icon = L.divIcon({
-				html: `<span style="display:block; width:${size}px; height:${size}px; border-radius:50%; background:var(--of-accent-solid); border:3px solid #fff; box-shadow:0 0 0 ${on ? 3 : 1}px ${on ? 'var(--of-accent-solid)' : 'rgba(0,0,0,.5)'}, 0 2px 5px rgba(0,0,0,.4);"></span>`,
+				html: `<span style="display:block; width:${size}px; height:${size}px; border-radius:${g.kind === 'gauge' ? '50%' : '5px'}; background:var(--of-accent-solid); border:3px solid #fff; box-shadow:0 0 0 ${on ? 3 : 1}px ${on ? 'var(--of-accent-solid)' : 'rgba(0,0,0,.5)'}, 0 2px 5px rgba(0,0,0,.4);"></span>`,
 				className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2]
 			});
 			L.marker([g.lat, g.lng], { icon, keyboard: true, title: g.name, zIndexOffset: on ? 1000 : 0 })
@@ -78,11 +86,12 @@
 
 	onMount(async () => {
 		L = (await import('leaflet')).default;
-		map = L.map(mapEl, { zoomControl: true, scrollWheelZoom: false, worldCopyJump: false });
+		map = L.map(mapEl, { zoomControl: true, scrollWheelZoom: true, wheelPxPerZoomLevel: 90, worldCopyJump: false });
 		L.tileLayer(TOPO_TILE_URL, { attribution: TOPO_ATTRIBUTION, maxNativeZoom: TOPO_MAX_ZOOM, maxZoom: TOPO_MAX_ZOOM, minZoom: 3 }).addTo(map);
 		layer = L.layerGroup().addTo(map);
 		map.fitBounds(framingBounds([]), { animate: false }); // a view right away, so it is never a grey box
 		map.on('dragstart', () => (userMoved = true));
+		mapEl.addEventListener('wheel', () => (userMoved = true), { passive: true });
 		mapEl.querySelector('.leaflet-control-zoom')?.addEventListener('click', () => (userMoved = true));
 		// A map that was laid out at the wrong size (page still settling, tab hidden) re-frames itself once it
 		// has its real size, unless the user has already moved it.
@@ -99,6 +108,7 @@
 	});
 
 	$effect(() => {
+		void waters.weather; // tooltips carry the weather
 		void gauges; // redraw whenever the list, its readings or the selection change
 		void selectedId;
 		void ready;

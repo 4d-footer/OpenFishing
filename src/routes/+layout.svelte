@@ -6,7 +6,7 @@
 	import { onMount } from 'svelte';
 	import type { LayoutData } from './$types';
 	import Chatbot from '#lib/components/Chatbot.svelte';
-	import { loadWaters } from '#lib/stores/waters.svelte.js';
+	import { loadWaters, loadWeather } from '#lib/stores/waters.svelte.js';
 
 	let { children, data }: { children: import('svelte').Snippet; data: LayoutData } = $props();
 	const { t, demoMode, chatbotEnabled } = data;
@@ -39,7 +39,7 @@
 
 	onMount(() => {
 		// Warm My Waters on every visit so the tab opens already filled.
-		if (data.hasWaters && !isLoginPage && !isSharePage) loadWaters();
+		if (data.hasWaters && !isLoginPage && !isSharePage) { loadWaters(); loadWeather(); }
 		if (!demoMode) return;
 		const handler = (e: Event) => {
 			const form = e.target as HTMLFormElement;

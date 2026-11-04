@@ -43,8 +43,10 @@ export class ForecastError extends Error {
 	}
 }
 
-const forecastCache = new TtlCache<Forecast>(FORECAST_TTL, 500);
+const forecastCache = new TtlCache<Result>(FORECAST_TTL, 500);
 const emptyCache = new TtlCache<true>(EMPTY_TTL, 500);
+// A flat NWS forecast whose model alternate wasn't there (the model feed is empty between runs): retry soon.
+const partialCache = new TtlCache<Result>(EMPTY_TTL, 500);
 const lidCache = new TtlCache<string | null>(LOOKUP_TTL, 2000);
 const comidCache = new TtlCache<string | null>(LOOKUP_TTL, 2000);
 const inflight = new Map<string, Promise<unknown>>();
@@ -52,6 +54,7 @@ const inflight = new Map<string, Promise<unknown>>();
 export function resetForecastState(): void {
 	forecastCache.clear();
 	emptyCache.clear();
+	partialCache.clear();
 	lidCache.clear();
 	comidCache.clear();
 	inflight.clear();
@@ -219,34 +222,59 @@ async function nwmForecast(number: string): Promise<Forecast | null> {
 
 // ── Public ──────────────────────────────────────────────────────────────────────
 
+/** True when every forecast value is (nearly) the same — NWS often just repeats the last observation. */
+export function isFlatForecast(f: Forecast | null): boolean {
+	if (!f) return false;
+	const sets = Object.values(f.series).filter((s): s is [number, number][] => Array.isArray(s) && s.length >= 2);
+	if (!sets.length) return false;
+	return sets.every((s) => {
+		const vs = s.map((p) => p[1]);
+		const lo = Math.min(...vs), hi = Math.max(...vs);
+		return hi - lo <= Math.max(Math.abs(hi), 1) * 0.005;
+	});
+}
+
+type Result = { forecast: Forecast | null; alternate: Forecast | null };
+
 /**
  * Best available forecast for a USGS site (NWS river forecast, else National Water Model), or null when
- * neither exists. `stale` is set when NOAA couldn't be reached and an older copy is returned.
+ * neither exists. When the NWS forecast is flat, the National Water Model is offered as `alternate`.
+ * `stale` is set when NOAA couldn't be reached and an older copy is returned.
  */
 export async function getForecast(
 	siteId: string,
 	lat: number | null,
 	lng: number | null
-): Promise<{ forecast: Forecast | null; stale: boolean }> {
+): Promise<{ forecast: Forecast | null; alternate: Forecast | null; stale: boolean }> {
 	const number = siteId.replace(/^USGS-/, '');
-	if (!/^\d{8,15}$/.test(number)) return { forecast: null, stale: false };
+	if (!/^\d{8,15}$/.test(number)) return { forecast: null, alternate: null, stale: false };
 	const hit = forecastCache.get(number);
-	if (hit?.fresh) return { forecast: hit.v, stale: false };
-	if (!hit && emptyCache.get(number)?.fresh) return { forecast: null, stale: false };
+	if (hit?.fresh) return { ...hit.v, stale: false };
+	const part = partialCache.get(number);
+	if (part?.fresh) return { ...part.v, stale: false };
+	if (!hit && emptyCache.get(number)?.fresh) return { forecast: null, alternate: null, stale: false };
 	try {
-		const result = await once(`fc|${number}`, async () => {
+		const result: Result = await once(`fc|${number}`, async () => {
 			const lid = await findLid(number, lat, lng);
 			if (lid) {
 				const nws = parseNwsForecast(await getJson(`${NWPS_URL}/gauges/${lid}/stageflow`), lid);
-				if (nws) return nws;
+				if (nws) {
+					let alternate: Forecast | null = null;
+					if (isFlatForecast(nws)) {
+						try { alternate = await nwmForecast(number); } catch { /* the alternate is a bonus */ }
+					}
+					return { forecast: nws, alternate };
+				}
 			}
-			return nwmForecast(number);
+			return { forecast: await nwmForecast(number), alternate: null };
 		});
-		if (result) forecastCache.set(number, result);
+		if (result.forecast && isFlatForecast(result.forecast) && !result.alternate) partialCache.set(number, result);
+		else if (result.forecast) forecastCache.set(number, result);
 		else emptyCache.set(number, true);
-		return { forecast: result, stale: false };
+		return { ...result, stale: false };
 	} catch (e) {
-		if (e instanceof ForecastError && hit) return { forecast: hit.v, stale: true };
+		const old = hit ?? part;
+		if (e instanceof ForecastError && old) return { ...old.v, stale: true };
 		throw e;
 	}
 }

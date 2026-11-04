@@ -7,11 +7,15 @@
 	import { queued } from '#lib/stores/waters.svelte.js';
 	import FlowChart from './FlowChart.svelte';
 	import GaugeThumb from './GaugeThumb.svelte';
+	import WeatherStrip from './WeatherStrip.svelte';
+	import type { Weather } from '#lib/server/weather.js';
 
 	let {
 		g,
 		t,
 		pending,
+		weather,
+		weatherLoading = false,
 		busy,
 		selected = false,
 		onselect,
@@ -20,6 +24,8 @@
 		g: GaugeView;
 		t: Translations;
 		pending: boolean; // first readings still on their way
+		weather: Weather | null | undefined;
+		weatherLoading?: boolean;
 		busy: boolean;
 		selected?: boolean;
 		onselect: () => void;
@@ -35,6 +41,8 @@
 	let fcSel = $state<number | null | 'off' | undefined>(undefined); // undefined: choose when the forecast arrives
 	let hist = $state<Record<string, Load<Series>>>({});
 	let fc = $state<Load<Forecast | null>>({ status: 'loading' });
+	let alt = $state<Forecast | null>(null);
+	let srcSel = $state<'primary' | 'alternate'>('primary');
 
 	// The metric on show: the one picked, else flow, else stage, else whatever the gauge has.
 	const metric = $derived<Metric | null>(metrics.find((m) => m.key === metricKey) ?? metrics[0] ?? null);
@@ -88,7 +96,9 @@
 		try {
 			const res = await queued(() => fetch(`/api/waters/${g.id}/forecast`));
 			if (!res.ok) throw new Error(String(res.status));
-			fc = { status: 'ok', value: ((await res.json()).forecast as Forecast | null) ?? null };
+			const body = await res.json();
+			alt = (body.alternate as Forecast | null) ?? null;
+			fc = { status: 'ok', value: (body.forecast as Forecast | null) ?? null };
 		} catch {
 			fc = { status: 'error' };
 		}
@@ -97,7 +107,9 @@
 		loadForecast();
 	});
 
-	const forecast = $derived(fc.status === 'ok' ? (fc.value ?? null) : null);
+	const primary = $derived(fc.status === 'ok' ? (fc.value ?? null) : null);
+	const forecast = $derived(srcSel === 'alternate' && alt && metric?.param === '00060' ? alt : primary);
+	const flatNws = $derived(!!alt && primary?.source === 'nws');
 	const fcPointsAll = $derived<[number, number][]>(metric?.forecastable && forecast ? (forecast.series[metric.param as '00060' | '00065'] ?? []) : []);
 	const fcHorizon = $derived(fcPointsAll.length ? (fcPointsAll[fcPointsAll.length - 1][0] - Date.now()) / 3600_000 : 0);
 	const windows = $derived(fcPointsAll.length >= 2 ? forecastWindows(fcHorizon) : []);
@@ -133,7 +145,9 @@
 		<button type="button" onclick={onremove} disabled={busy} aria-label={t.watersRemove} title={t.watersRemove}
 			style="font-size:0.8rem; padding:3px 9px; line-height:1; border-radius:9px; cursor:pointer; color:var(--of-text-3); background:transparent; border:1px solid var(--of-border-subtle);">✕</button>
 	</header>
-	<a href={g.usgsUrl} target="_blank" rel="noopener noreferrer" style="display:inline-block; margin:6px 0 0 96px; font-size:0.72rem; color:var(--of-text-3);">{t.watersViewUsgs} ↗</a>
+	{#if g.usgsUrl}<a href={g.usgsUrl} target="_blank" rel="noopener noreferrer" style="display:inline-block; margin:6px 0 0 96px; font-size:0.72rem; color:var(--of-text-3);">{t.watersViewUsgs} ↗</a>{/if}
+
+	<div style="margin-top:12px;"><WeatherStrip w={weather} {t} loading={weatherLoading} /></div>
 
 	{#if pending && !g.latest}
 		<p style="margin:16px 0 4px; font-size:0.8rem; color:var(--of-text-4);">{t.watersRefreshing}</p>
@@ -188,6 +202,13 @@
 					<button type="button" onclick={() => (hours = h)} aria-pressed={hours === h} data-testid="range-{h}" style={chip(hours === h)}>{rangeLabel(h)}</button>
 				{/each}
 			</div>
+			{#if metric.forecastable && alt && primary && (metric.param === '00060')}
+				<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;" data-testid="source-row">
+					<span style="{rowLabel}">{t.watersForecastSource}</span>
+					<button type="button" onclick={() => (srcSel = 'primary')} aria-pressed={srcSel === 'primary'} data-testid="src-primary" style={chip(srcSel === 'primary')}>{primary.source === 'nws' ? t.watersSrcNws : t.watersSrcModel}</button>
+					<button type="button" onclick={() => (srcSel = 'alternate')} aria-pressed={srcSel === 'alternate'} data-testid="src-alternate" style={chip(srcSel === 'alternate')}>{t.watersSrcModel}</button>
+				</div>
+			{/if}
 			{#if metric.forecastable}
 				<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;" data-testid="forecast-row">
 					<span style="{rowLabel}">{t.watersForecast}</span>
@@ -214,6 +235,9 @@
 				<p style="margin:12px 0; font-size:0.8rem; color:var(--of-text-3);">{t.watersChartFailed}</p>
 			{:else if histPoints.length + fcPoints.length >= 2}
 				<FlowChart history={histPoints} forecast={fcPoints} {metric} {t} />
+				{#if flatNws && forecast === primary && metric?.param === '00060' && fcPoints.length}
+					<p style="margin:8px 0 0; font-size:0.7rem; color:var(--of-text-3); line-height:1.45;" data-testid="flat-note">{t.watersForecastFlat}</p>
+				{/if}
 				{#if fcPoints.length && forecast}
 					<p style="margin:8px 0 0; font-size:0.7rem; color:var(--of-text-4); line-height:1.45;" data-testid="forecast-note">
 						{forecast.source === 'nws' ? t.watersForecastNws : t.watersForecastNwm}

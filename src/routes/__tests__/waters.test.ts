@@ -18,6 +18,9 @@ const mockGetLatest = vi.fn();
 const mockGetSeries = vi.fn();
 const mockSearch = vi.fn();
 const mockRange = vi.fn();
+const mockLakes = vi.fn();
+const mockLake = vi.fn();
+const mockWeather = vi.fn();
 const mockForecast = vi.fn();
 vi.mock('#lib/server/usgs.js', async (orig) => ({
 	...(await orig<typeof import('#lib/server/usgs.js')>()),
@@ -26,6 +29,15 @@ vi.mock('#lib/server/usgs.js', async (orig) => ({
 	getSeries: mockGetSeries,
 	searchGauges: mockSearch,
 	getRangeSeries: mockRange
+}));
+vi.mock('#lib/server/waterbodies.js', async (orig) => ({
+	...(await orig<typeof import('#lib/server/waterbodies.js')>()),
+	searchWaterbodies: mockLakes,
+	getWaterbody: mockLake
+}));
+vi.mock('#lib/server/weather.js', async (orig) => ({
+	...(await orig<typeof import('#lib/server/weather.js')>()),
+	getWeather: mockWeather
 }));
 vi.mock('#lib/server/forecast.js', async (orig) => ({
 	...(await orig<typeof import('#lib/server/forecast.js')>()),
@@ -43,6 +55,8 @@ const search = (await import('../api/waters/search/+server')).GET;
 const history = (await import('../api/waters/[id]/history/+server')).GET;
 const forecastRoute = (await import('../api/waters/[id]/forecast/+server')).GET;
 const { ForecastError } = await import('#lib/server/forecast.js');
+const weatherRoute = (await import('../api/waters/weather/+server')).GET;
+const { WaterbodyError } = await import('#lib/server/waterbodies.js');
 const pageLoad = (await import('../waters/+page.server')).load;
 
 const A = { user: { id: 'user-a' } } as any;
@@ -70,6 +84,9 @@ beforeEach(async () => {
 	mockSearch.mockReset();
 	mockRange.mockReset();
 	mockForecast.mockReset();
+	mockLakes.mockReset().mockResolvedValue({ items: [], truncated: false });
+	mockLake.mockReset();
+	mockWeather.mockReset().mockResolvedValue({ data: new Map(), stale: false });
 });
 
 describe('POST /api/waters (follow a gauge)', () => {
@@ -200,9 +217,9 @@ describe('GET /api/waters/search', () => {
 
 	it('maps USGS trouble to 503 / 429', async () => {
 		mockSearch.mockRejectedValue(new UsgsError('unavailable'));
-		expect((await get(search, A, 'q=missouri')).status).toBe(503);
+		expect((await get(search, A, 'q=missouri river')).status).toBe(503);
 		mockSearch.mockRejectedValue(new UsgsError('rate_limited'));
-		expect((await get(search, A, 'q=missouri')).status).toBe(429);
+		expect((await get(search, A, 'q=missouri river')).status).toBe(429);
 	});
 
 	it('throttles a user who searches too fast, per user', async () => {
@@ -296,5 +313,141 @@ describe('GET /api/waters/:id/history and /forecast', () => {
 		expect(await (await call(forecastRoute, A, id)).json()).toEqual({ forecast: null, stale: false });
 		mockForecast.mockRejectedValue(new ForecastError('unavailable'));
 		expect((await call(forecastRoute, A, id)).status).toBe(503);
+	});
+});
+
+const lake = (extra: object = {}) => ({ siteId: 'GNIS-1559164', name: 'Cacapon Lake', kind: 'reservoir', state: 'West Virginia', county: 'Morgan', lat: 39.508, lng: -78.306, areaKm2: null, ...extra });
+
+describe('lakes, reservoirs and ponds (no gauge)', () => {
+	const call = (fn: any, locals: any, id: string, qs = '') => fn({ params: { id }, url: new URL('http://x/?' + qs), locals } as any) as Promise<Response>;
+
+	it('follows a lake using The National Map details, not the client\'s', async () => {
+		mockLake.mockResolvedValue(lake());
+		const res = await post(A, { siteId: 'GNIS-1559164', name: 'EVIL', lat: 0, lng: 0 });
+		expect(res.status).toBe(201);
+		const { gauge } = await res.json();
+		expect(gauge).toMatchObject({ kind: 'reservoir', siteId: 'GNIS-1559164', name: 'Cacapon Lake', state: 'West Virginia', lat: 39.508, usgsUrl: null, latest: null, series: null, trend: null });
+		expect(mockGetSite).not.toHaveBeenCalled();
+		const [row] = await db.select().from(schema.waterGauge);
+		expect(row).toMatchObject({ river: 'reservoir', userId: 'user-a' });
+	});
+
+	it.each([['GNIS-'], ['GNIS-abc'], ["GNIS-1'; DROP"], ['GNIS-12345678901'], ['gnis-1']])('rejects %j', async (siteId) => {
+		expect((await post(A, { siteId })).status).toBe(400);
+		expect(mockLake).not.toHaveBeenCalled();
+	});
+
+	it('404s an unknown lake, 503s when The National Map is down, and saves nothing either way', async () => {
+		mockLake.mockResolvedValue(null);
+		expect((await post(A, { siteId: 'GNIS-1' })).status).toBe(404);
+		mockLake.mockRejectedValue(new WaterbodyError('x'));
+		expect((await post(A, { siteId: 'GNIS-1' })).status).toBe(503);
+		expect(await db.select().from(schema.waterGauge)).toHaveLength(0);
+	});
+
+	it('counts toward the same 24-water limit and rejects duplicates', async () => {
+		mockLake.mockResolvedValue(lake());
+		expect((await post(A, { siteId: 'GNIS-1559164' })).status).toBe(201);
+		expect((await post(A, { siteId: 'GNIS-1559164' })).status).toBe(409);
+		for (let i = 1; i < MAX_GAUGES; i++) await post(A, { siteId: `USGS-0${6000000 + i}` });
+		expect((await post(A, { siteId: 'USGS-06009999' })).status).toBe(422);
+	});
+
+	it('data: asks USGS only about gauges, and lists lakes with empty readings', async () => {
+		mockLake.mockResolvedValue(lake());
+		await post(A, { siteId: 'GNIS-1559164' });
+		await post(A, { siteId: 'USGS-06000001' });
+		const body = await (await get(data, A)).json();
+		expect(mockGetLatest).toHaveBeenCalledWith(['USGS-06000001']);
+		expect(body.gauges.map((g: any) => [g.kind, g.siteId])).toEqual([['reservoir', 'GNIS-1559164'], ['gauge', 'USGS-06000001']]);
+	});
+
+	it('data: a list of only lakes does not touch USGS', async () => {
+		mockLake.mockResolvedValue(lake({ kind: 'pond' }));
+		await post(A, { siteId: 'GNIS-1559164' });
+		const body = await (await get(data, A)).json();
+		expect(mockGetLatest).not.toHaveBeenCalled();
+		expect(body.gauges[0].kind).toBe('pond');
+	});
+
+	it('history and forecast answer "nothing" for a lake without calling anyone', async () => {
+		mockLake.mockResolvedValue(lake());
+		const id = (await (await post(A, { siteId: 'GNIS-1559164' })).json()).gauge.id;
+		expect(await (await call(history, A, id, 'hours=24')).json()).toMatchObject({ series: null });
+		expect(await (await call(forecastRoute, A, id)).json()).toMatchObject({ forecast: null });
+		expect(mockRange).not.toHaveBeenCalled();
+		expect(mockForecast).not.toHaveBeenCalled();
+	});
+
+	it('page load shows saved lakes', async () => {
+		mockLake.mockResolvedValue(lake());
+		await post(A, { siteId: 'GNIS-1559164' });
+		const out: any = await pageLoad({ locals: A } as any);
+		expect(out.gauges[0]).toMatchObject({ kind: 'reservoir', name: 'Cacapon Lake' });
+	});
+});
+
+describe('search: rivers and lakes together', () => {
+	const found = (n: number) => ({ ...gauge(n), latest: { discharge: null, stage: null } });
+
+	it('"Mud Lake" searches lakes only; "Gallatin River" gauges only; "Cacapon" both', async () => {
+		mockSearch.mockResolvedValue({ gauges: [], truncated: false, stale: false });
+		await get(search, A, 'q=Mud Lake');
+		expect(mockLakes).toHaveBeenCalledTimes(1); expect(mockSearch).not.toHaveBeenCalled();
+		mockLakes.mockClear();
+		await get(search, A, 'q=Gallatin River');
+		expect(mockSearch).toHaveBeenCalledTimes(1); expect(mockLakes).not.toHaveBeenCalled();
+		mockSearch.mockClear();
+		await get(search, A, 'q=Cacapon');
+		expect(mockSearch).toHaveBeenCalledTimes(1); expect(mockLakes).toHaveBeenCalledTimes(1);
+	});
+
+	it('returns both lists, marking what is already followed', async () => {
+		mockLake.mockResolvedValue(lake());
+		await post(A, { siteId: 'GNIS-1559164' });
+		mockSearch.mockResolvedValue({ gauges: [found(1)], truncated: true, stale: false });
+		mockLakes.mockResolvedValue({ items: [lake(), lake({ siteId: 'GNIS-2', name: 'Cacapon Pond', kind: 'pond' })], truncated: true });
+		const body = await (await get(search, A, 'q=Cacapon')).json();
+		expect(body.gauges.map((g: any) => g.siteId)).toEqual(['USGS-06000001']);
+		expect(body.waterbodies.map((w: any) => [w.siteId, w.saved])).toEqual([['GNIS-1559164', true], ['GNIS-2', false]]);
+		expect(body.truncated).toBe(true); expect(body.waterbodiesTruncated).toBe(true); expect(body.partial).toBeNull();
+	});
+
+	it('one half failing still returns the other, flagged; both failing is an error', async () => {
+		mockSearch.mockRejectedValue(new UsgsError('unavailable'));
+		mockLakes.mockResolvedValue({ items: [lake()], truncated: false });
+		let body = await (await get(search, A, 'q=Cacapon')).json();
+		expect(body.partial).toBe('gauges'); expect(body.waterbodies).toHaveLength(1);
+		mockSearch.mockResolvedValue({ gauges: [found(1)], truncated: false, stale: false });
+		mockLakes.mockRejectedValue(new WaterbodyError('x'));
+		body = await (await get(search, A, 'q=Cacapon')).json();
+		expect(body.partial).toBe('lakes'); expect(body.gauges).toHaveLength(1);
+		mockSearch.mockRejectedValue(new UsgsError('rate_limited'));
+		expect((await get(search, A, 'q=Cacapon')).status).toBe(429);
+		mockSearch.mockRejectedValue(new Error('boom'));
+		mockLakes.mockRejectedValue(new WaterbodyError('x'));
+		expect((await get(search, A, 'q=Cacapon')).status).toBe(503);
+	});
+
+	it('a lone lake-search failure for a lake query is a 503', async () => {
+		mockLakes.mockRejectedValue(new WaterbodyError('x'));
+		expect((await get(search, A, 'q=Mud Lake')).status).toBe(503);
+	});
+});
+
+describe('GET /api/waters/weather', () => {
+	it("asks for every one of the caller's waters at once, and only theirs", async () => {
+		mockLake.mockResolvedValue(lake());
+		const a = (await (await post(A, { siteId: 'GNIS-1559164' })).json()).gauge.id;
+		const b = (await (await post(A, { siteId: 'USGS-06000001' })).json()).gauge.id;
+		await post(B, { siteId: 'USGS-06000002' });
+		mockWeather.mockResolvedValue({ data: new Map([[a, { tempF: 50 }], [b, null]]), stale: true });
+		const res = await get(weatherRoute, A);
+		expect(res.headers.get('cache-control')).toContain('no-store');
+		expect(mockWeather.mock.calls[0][0].map((p: any) => p.id).sort()).toEqual([a, b].sort());
+		expect(await res.json()).toMatchObject({ weather: { [a]: { tempF: 50 }, [b]: null }, stale: true });
+	});
+	it('works with nothing followed', async () => {
+		expect((await (await get(weatherRoute, A)).json()).weather).toEqual({});
 	});
 });

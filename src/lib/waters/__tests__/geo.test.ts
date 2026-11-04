@@ -108,7 +108,7 @@ describe('chartGeometry', () => {
 	it('finds the nearest point', () => expect(nearestIndex([0, 0.5, 1], 0.6)).toBe(1));
 });
 
-import { availableMetrics, readingOf, METRICS, cToF, formatValue, dualGeometry } from '../geo';
+import { availableMetrics, readingOf, METRICS, cToF, formatValue, dualGeometry, niceScale } from '../geo';
 
 describe('metrics', () => {
 	const latest = {
@@ -162,5 +162,41 @@ describe('dualGeometry', () => {
 	it('needs at least two points in total, and survives a flat series', () => {
 		expect(dualGeometry([[1, 1]], [])).toBeNull();
 		expect(dualGeometry([[1, 5], [2, 5]], [])!.points.every((p) => Number.isFinite(p.y))).toBe(true);
+	});
+});
+
+describe('niceScale — the axis follows the data', () => {
+	it('snaps outward to round steps', () => {
+		expect(niceScale(0, 100, 4)).toMatchObject({ lo: 0, hi: 100, decimals: 0 });
+		const s = niceScale(91.3, 115.2, 3);
+		expect(s.lo).toBeLessThanOrEqual(91.3); expect(s.hi).toBeGreaterThanOrEqual(115.2);
+		expect(s.ticks.length).toBeGreaterThanOrEqual(2); expect(s.ticks.length).toBeLessThanOrEqual(8);
+		expect(s.ticks[0]).toBe(s.lo); expect(s.ticks[s.ticks.length - 1]).toBe(s.hi);
+	});
+	it('zooms in on narrow ranges instead of starting from zero', () => {
+		const s = niceScale(1.48, 1.56, 3);
+		expect(s.lo).toBeGreaterThan(1.3); expect(s.hi).toBeLessThan(1.7);
+		expect(s.decimals).toBeGreaterThanOrEqual(2);
+	});
+	it('uses whole numbers for big ranges and decimals for small steps', () => {
+		expect(niceScale(1000, 52000, 4).decimals).toBe(0);
+		expect(niceScale(7.1, 7.9, 3).decimals).toBeGreaterThanOrEqual(1);
+	});
+	it('pads a flat series so it sits mid-axis', () => {
+		const s = niceScale(92, 92, 3);
+		expect(s.lo).toBeLessThan(92); expect(s.hi).toBeGreaterThan(92);
+	});
+	it('handles negatives and garbage', () => {
+		const s = niceScale(-12, 8, 4);
+		expect(s.lo).toBeLessThanOrEqual(-12); expect(s.ticks).toContain(0);
+		expect(niceScale(NaN, 1).ticks.length).toBeGreaterThan(0);
+		expect(niceScale(5, 1).lo).toBeLessThanOrEqual(1);
+	});
+	it('dualGeometry exposes ticks inside the chart for any series', () => {
+		const g = dualGeometry([[0, 92], [1, 92], [2, 92]], [])!;
+		expect(g.ticks.length).toBeGreaterThanOrEqual(2);
+		for (const t of g.ticks) { expect(t.y).toBeGreaterThanOrEqual(0); expect(t.y).toBeLessThanOrEqual(1); }
+		const flatYs = g.points.map((p) => p.y);
+		expect(Math.max(...flatYs)).toBeLessThan(0.9); expect(Math.min(...flatYs)).toBeGreaterThan(0.1);
 	});
 });

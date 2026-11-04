@@ -130,9 +130,9 @@ export function nearestIndex(xs: number[], f: number): number {
 // ── Readings the app can show and chart ─────────────────────────────────────────
 
 export interface Metric {
-	key: 'discharge' | 'stage' | 'temp' | 'cond' | 'do' | 'ph' | 'turb';
+	key: 'discharge' | 'stage' | 'temp' | 'cond' | 'do' | 'ph' | 'turb' | 'air' | 'pressure' | 'wind';
 	param: string; // USGS parameter code
-	label: 'watersFlow' | 'watersStage' | 'watersTemp' | 'watersCond' | 'watersDO' | 'watersPH' | 'watersTurb';
+	label: 'watersFlow' | 'watersStage' | 'watersTemp' | 'watersCond' | 'watersDO' | 'watersPH' | 'watersTurb' | 'watersAirTemp' | 'watersPressure' | 'watersWind';
 	unit: string;
 	decimals: number;
 	/** Convert the USGS value for display (water temperature arrives in °C). */
@@ -193,7 +193,36 @@ export interface DualGeometry {
 	max: number;
 	t0: number;
 	t1: number;
+	/** Y-axis labels: value and where it sits (0 = top, 1 = bottom). */
+	ticks: { v: number; y: number }[];
+	/** Digits after the point that tick labels need. */
+	tickDecimals: number;
 	points: DualPoint[];
+}
+
+/**
+ * A tidy axis around [min, max]: round-numbered steps (1, 2, 2.5, 5 × 10ⁿ), a domain that snaps outward to
+ * them, and the number of decimals the labels need. A flat series gets a padded domain so it reads as flat.
+ */
+export function niceScale(min: number, max: number, target = 4): { lo: number; hi: number; ticks: number[]; decimals: number } {
+	if (!Number.isFinite(min) || !Number.isFinite(max)) return { lo: 0, hi: 1, ticks: [0, 1], decimals: 0 };
+	if (max < min) [min, max] = [max, min];
+	let span = max - min;
+	if (span < Math.max(Math.abs(max), Math.abs(min), 1e-9) * 1e-6) {
+		const pad = Math.max(Math.abs(max) * 0.05, 0.5);
+		min -= pad; max += pad; span = max - min;
+	}
+	const raw = span / Math.max(target, 1);
+	const pow = 10 ** Math.floor(Math.log10(raw));
+	const f = raw / pow;
+	const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * pow;
+	const lo = Math.floor(min / step + 1e-9) * step;
+	const hi = Math.ceil(max / step - 1e-9) * step;
+	let decimals = 0;
+	while (decimals < 6 && Math.abs(step * 10 ** decimals - Math.round(step * 10 ** decimals)) > 1e-6) decimals++;
+	const ticks: number[] = [];
+	for (let v = lo, i = 0; v <= hi + step * 1e-6 && i < 50; v += step, i++) ticks.push(Number(v.toFixed(8)));
+	return { lo, hi, ticks, decimals };
 }
 
 /**
@@ -208,7 +237,8 @@ export function dualGeometry(history: [number, number][], forecast: [number, num
 	const t0 = all[0][0], t1 = all[all.length - 1][0];
 	let min = Infinity, max = -Infinity;
 	for (const p of all) { if (p[1] < min) min = p[1]; if (p[1] > max) max = p[1]; }
-	const lo = min === max ? min - 1 : min, hi = min === max ? max + 1 : max;
+	const sc = niceScale(min, max, 3);
+	const lo = sc.lo, hi = sc.hi;
 	const fx = (t: number) => (t1 === t0 ? 0.5 : (t - t0) / (t1 - t0));
 	const fy = (v: number) => (H - pad - ((v - lo) / (hi - lo)) * (H - pad * 2)) / H;
 	const path = (pts: [number, number][]) => pts.map((p, i) => `${i ? 'L' : 'M'}${(fx(p[0]) * W).toFixed(1)},${(fy(p[1]) * H).toFixed(1)}`).join('');
@@ -221,9 +251,31 @@ export function dualGeometry(history: [number, number][], forecast: [number, num
 		fcArea: area(seam),
 		nowX: history.length && fc.length ? fx(lastHist) : null,
 		min, max, t0, t1,
+		ticks: sc.ticks.map((v) => ({ v, y: fy(v) })),
+		tickDecimals: sc.decimals,
 		points: [
 			...history.map((p) => ({ x: fx(p[0]), y: fy(p[1]), t: p[0], v: p[1], forecast: false })),
 			...fc.map((p) => ({ x: fx(p[0]), y: fy(p[1]), t: p[0], v: p[1], forecast: true }))
 		]
 	};
+}
+
+// ── Weather charts (lakes have no gauge, so the weather is what they chart) ─────
+
+export const WEATHER_METRICS: (Metric & { series: 'tempF' | 'pressureInHg' | 'windMph' })[] = [
+	{ key: 'air', param: 'air', label: 'watersAirTemp', unit: '°F', decimals: 0, forecastable: true, series: 'tempF' },
+	{ key: 'pressure', param: 'pressure', label: 'watersPressure', unit: 'inHg', decimals: 2, forecastable: true, series: 'pressureInHg' },
+	{ key: 'wind', param: 'wind', label: 'watersWind', unit: 'mph', decimals: 0, forecastable: true, series: 'windMph' }
+];
+
+/** Split an hourly weather series into what has happened and what is expected, around `now`. */
+export function splitHourly(hourly: { t: number[] } & Record<string, number[]>, field: string, now = Date.now()): { past: [number, number][]; future: [number, number][] } {
+	const past: [number, number][] = [], future: [number, number][] = [];
+	const vals = hourly[field] ?? [];
+	for (let i = 0; i < hourly.t.length; i++) {
+		const v = vals[i];
+		if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+		(hourly.t[i] <= now ? past : future).push([hourly.t[i], v]);
+	}
+	return { past, future };
 }

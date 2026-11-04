@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getForecast, parseNwsForecast, parseNwmSeries, resetForecastState, ForecastError, forecastHorizonHours } from '#lib/server/forecast.js';
+import { getForecast, parseNwsForecast, parseNwmSeries, resetForecastState, ForecastError, forecastHorizonHours, isFlatForecast } from '#lib/server/forecast.js';
 
 const H = 3600_000;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -142,6 +142,42 @@ describe('getForecast', () => {
 		expect((await getForecast('USGS-06043500', 45.4972, -111.2708)).forecast?.source).toBe('nwm');
 	});
 
+	it('offers the model as an alternate when the NWS forecast is just a flat line, and not otherwise', async () => {
+		nwsRoutes();
+		routes['/nwissite/USGS-06043500'] = () => ({ body: { features: [{ properties: { comid: 3855315 } }] } });
+		routes['/reaches/3855315/streamflow'] = () => ({ body: nwmBody(18) });
+		const moving = await getForecast('USGS-06043500', 45.4972, -111.2708);
+		expect(moving.alternate).toBeNull();
+		resetForecastState();
+		const flat = nwsBody();
+		for (const r of flat.forecast.data) { (r as any).secondary = 5; (r as any).primary = 92; }
+		routes['/gauges/GLGM8/stageflow'] = () => ({ body: flat });
+		const out = await getForecast('USGS-06043500', 45.4972, -111.2708);
+		expect(out.forecast?.source).toBe('nws');
+		expect(out.alternate?.source).toBe('nwm');
+	});
+
+	it('a flat NWS forecast with no model run yet is retried after the short cache, not the long one', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		try {
+			vi.setSystemTime(now);
+			nwsRoutes();
+			const flat = nwsBody();
+			for (const r of flat.forecast.data) { (r as any).secondary = 5; (r as any).primary = 92; }
+			routes['/gauges/GLGM8/stageflow'] = () => ({ body: flat });
+			routes['/nwissite/USGS-06043500'] = () => ({ body: { features: [{ properties: { comid: 3855315 } }] } });
+			routes['/reaches/3855315/streamflow'] = () => ({ body: { shortRange: {}, mediumRange: {} } });
+			expect((await getForecast('USGS-06043500', 45.4972, -111.2708)).alternate).toBeNull();
+			routes['/reaches/3855315/streamflow'] = () => ({ body: nwmBody(18) });
+			vi.setSystemTime(now + 60_000);
+			expect((await getForecast('USGS-06043500', 45.4972, -111.2708)).alternate).toBeNull(); // still the short cache
+			vi.setSystemTime(now + 6 * 60_000);
+			expect((await getForecast('USGS-06043500', 45.4972, -111.2708)).alternate?.source).toBe('nwm');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('returns null when there is no NWS gauge and no model reach', async () => {
 		routes['/gauges?bbox'] = () => ({ body: { gauges: [] } });
 		routes['/nwissite/'] = () => ({ status: 404 });
@@ -205,5 +241,16 @@ describe('getForecast', () => {
 		vi.useRealTimers();
 		expect(r.stale).toBe(true);
 		expect(r.forecast?.source).toBe('nws');
+	});
+});
+
+describe('isFlatForecast', () => {
+	const f = (v: number[]) => ({ source: 'nws' as const, issuedAt: null, lid: 'X', series: { '00060': v.map((x, i) => [i * 3600e3, x] as [number, number]) } });
+	it('flags a repeated value, not a moving one, and handles nothing', () => {
+		expect(isFlatForecast(f([92, 92, 92, 92]))).toBe(true);
+		expect(isFlatForecast(f([92, 92.2, 92, 92]))).toBe(true);
+		expect(isFlatForecast(f([92, 100, 115]))).toBe(false);
+		expect(isFlatForecast(null)).toBe(false);
+		expect(isFlatForecast(f([5]))).toBe(false);
 	});
 });
