@@ -12,7 +12,8 @@ import {
 	reel,
 	fishingLine,
 	combo,
-	chatMessage
+	chatMessage,
+	waterGauge
 } from '#lib/server/db/schema.js';
 
 const scrypt = promisify(_scrypt);
@@ -208,7 +209,7 @@ async function provisionAdmin(): Promise<void> {
 }
 
 async function claimOrphanRows(adminId: string): Promise<void> {
-	const owned = [lure, spot, fishCatch, rod, reel, fishingLine, combo, chatMessage] as const;
+	const owned = [lure, spot, fishCatch, rod, reel, fishingLine, combo, chatMessage, waterGauge] as const;
 	for (const table of owned) {
 		await db.update(table).set({ userId: adminId }).where(isNull(table.userId));
 	}

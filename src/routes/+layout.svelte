@@ -6,6 +6,7 @@
 	import { onMount } from 'svelte';
 	import type { LayoutData } from './$types';
 	import Chatbot from '#lib/components/Chatbot.svelte';
+	import { loadWaters } from '#lib/stores/waters.svelte.js';
 
 	let { children, data }: { children: import('svelte').Snippet; data: LayoutData } = $props();
 	const { t, demoMode, chatbotEnabled } = data;
@@ -21,6 +22,7 @@
 	const spotsActive    = $derived(page.url.pathname.startsWith('/spots'));
 	const catchesActive  = $derived(page.url.pathname.startsWith('/catches'));
 	const statsActive    = $derived(page.url.pathname.startsWith('/stats'));
+	const watersActive   = $derived(page.url.pathname.startsWith('/waters'));
 	const tackleActive   = $derived(page.url.pathname.startsWith('/tackle'));
 	const settingsActive = $derived(page.url.pathname.startsWith('/settings') || page.url.pathname === '/qr');
 
@@ -36,6 +38,8 @@
 	}
 
 	onMount(() => {
+		// Warm My Waters on every visit so the tab opens already filled.
+		if (data.hasWaters && !isLoginPage && !isSharePage) loadWaters();
 		if (!demoMode) return;
 		const handler = (e: Event) => {
 			const form = e.target as HTMLFormElement;
@@ -119,6 +123,13 @@
 				onmouseenter={function(e){ if (!catchesActive) { (e.currentTarget as HTMLElement).style.color='var(--of-text)'; (e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.04)'; }}}
 				onmouseleave={function(e){ if (!catchesActive) { (e.currentTarget as HTMLElement).style.color='var(--of-text-3)'; (e.currentTarget as HTMLElement).style.background=''; }}}
 			>{t.navCatches}</a>
+
+			<a href="/waters"
+				class="text-sm font-medium px-3 py-1.5 rounded-lg transition-all"
+				style={watersActive ? 'color:var(--of-accent); background:var(--of-accent-glow); border:1px solid var(--of-accent-border);' : 'color:var(--of-text-3); border:1px solid transparent;'}
+				onmouseenter={function(e){ if (!watersActive) { (e.currentTarget as HTMLElement).style.color='var(--of-text)'; (e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.04)'; }}}
+				onmouseleave={function(e){ if (!watersActive) { (e.currentTarget as HTMLElement).style.color='var(--of-text-3)'; (e.currentTarget as HTMLElement).style.background=''; }}}
+			>{t.navWaters}</a>
 
 			<a href="/stats"
 				class="text-sm font-medium px-3 py-1.5 rounded-lg transition-all"
@@ -314,6 +325,14 @@
 				<circle cx="7" cy="11" r="1" fill="currentColor" opacity={catchesActive ? '1' : '0.5'}/>
 			</svg>
 			<span style="font-size:0.65rem; font-weight:600; letter-spacing:0.03em;">{t.navCatches}</span>
+		</a>
+
+		<!-- My Waters -->
+		<a href="/waters" style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; text-decoration:none; transition:color 0.15s; color:{watersActive ? 'var(--of-accent)' : 'var(--of-text-4)'};">
+			<svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+				<path d="M2 9c2.5-2 4.5-2 7 0s4.5 2 7 0 4-1.5 6-.5M2 15c2.5-2 4.5-2 7 0s4.5 2 7 0 4-1.5 6-.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+			</svg>
+			<span style="font-size:0.6rem; font-weight:600; letter-spacing:0.02em;">{t.navWaters}</span>
 		</a>
 
 		<!-- Stats -->

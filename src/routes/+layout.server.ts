@@ -2,8 +2,9 @@ import type { LayoutServerLoad } from './$types';
 import { translations, defaultLang, SUPPORTED_LANGS, type Lang } from '#lib/i18n/index.js';
 import { env } from '#lib/server/env.js';
 import { db } from '#lib/server/db/index.js';
-import { appSetting, userSetting } from '#lib/server/db/schema.js';
-import { and, eq, inArray } from 'drizzle-orm';
+import { appSetting, userSetting, waterGauge } from '#lib/server/db/schema.js';
+import { and, count, eq, inArray } from 'drizzle-orm';
+import { userFilter } from '#lib/server/scope.js';
 import { authEnabled } from '#lib/server/auth.js';
 
 export const load: LayoutServerLoad = async ({ cookies, request, locals }) => {
@@ -37,6 +38,13 @@ export const load: LayoutServerLoad = async ({ cookies, request, locals }) => {
 
 	const chatbotEnabled = !!env.CHATBOT && (locals?.user?.chatbotEnabled ?? true);
 
+	// Whether to warm the My Waters data in the background (skipped on the login screen).
+	let hasWaters = false;
+	if (locals?.user || !authEnabled()) {
+		const [row] = await db.select({ n: count() }).from(waterGauge).where(userFilter(locals, waterGauge.userId));
+		hasWaters = (row?.n ?? 0) > 0;
+	}
+
 	return {
 		t: translations[lang],
 		lang,
@@ -45,6 +53,7 @@ export const load: LayoutServerLoad = async ({ cookies, request, locals }) => {
 		colorMode,
 		themeName,
 		authEnabled: authEnabled(),
+		hasWaters,
 		user: locals?.user ? { username: locals.user.username, email: locals.user.email, isAdmin: locals.user.isAdmin } : null
 	};
 };

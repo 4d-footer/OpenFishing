@@ -151,6 +151,11 @@ Tests live in `e2e/*.test.ts`. Config: `playwright.config.ts`.
 | `/reset-password` | Set a new password from a `?token=` reset link (hashed token, 1h expiry) |
 | `/login/oidc` | GET — start the OIDC flow (only when OIDC is configured; otherwise redirects to `/login`) |
 | `/login/oidc/callback` | GET — OIDC redirect URI: validates the response, finds/links/creates the user, sets the session |
+| `/waters` | My Waters: followed USGS gauge tiles (current flow/stage, trend, 24h chart) + US river search. Server load returns names only (`peekGaugeViews`, cache-only, never blocks on USGS); readings arrive via `/api/waters/data` |
+| `/api/waters/search` | GET `?q=` — active USGS stream gauges on a river (per-user throttle 20/min; 400 invalid, 429 too_many/rate_limited, 503 unavailable) |
+| `/api/waters` | POST `{siteId}` — follow a gauge. Name/river/location are re-fetched from USGS (`getSite`), never taken from the client. 404 unknown, 409 duplicate, 422 limit (24/user) |
+| `/api/waters/[id]` | DELETE — unfollow own gauge |
+| `/api/waters/data` | GET — readings + 24h series for the caller's gauges (`no-store`) |
 | `/logout` | POST action — clears the session cookie and redirects to `/login` |
 | `/settings/account` | Self-service Settings tab: change own email/username (+ password for non-admins), view API token + storage usage, log out (`/account` redirects here) |
 | `/settings/admin` | Admin-only Settings tab: user management (create/edit/delete users, quotas, password reset, enable/disable, chatbot toggle, API token) + full backup/restore-all (`/admin` redirects here) |
@@ -194,7 +199,7 @@ This approach avoids storing a redundant FK while still supporting the "no spot 
 ### Navigation
 
 The layout (`src/routes/+layout.svelte`) renders the full nav chrome for all routes **except** `/login` and `/share/*`, which are detected via `$page.url.pathname` and render `{@render children()}` directly (share pages include their own minimal OpenFishing header). The nav has:
-- **Desktop**: SVG wordmark logo (`src/lib/assets/openfishing-logo.svg`) + section links (Lures | Tackle | Spots | Catches | Stats | Settings) + "Add" dropdown + language switcher
+- **Desktop**: SVG wordmark logo (`src/lib/assets/openfishing-logo.svg`) + section links (Lures | Tackle | Spots | Catches | My Waters | Stats | Settings) + "Add" dropdown + language switcher
 - **Mobile**: Top bar (logo + Add dropdown + lang) + fixed bottom tab bar
 
 **SVG assets** — three files handle branding:
@@ -211,6 +216,10 @@ The language switcher is a `<select>` with flag emoji options, posting to `/api/
 Translations live in `src/lib/i18n/{en,de,fr,es,it,nl,pl,pt,uk}.ts` (9 files). The layout server (`src/routes/+layout.server.ts`) reads the `lang` cookie (falling back to `Accept-Language` header) and returns `{ t, lang }`, which SvelteKit merges into every page's `data` prop automatically.
 
 When adding new UI strings, add keys to **all 9 language files**. The server-side AI endpoints (`/api/chat`, `/api/identify-fish`, `/api/identify-lure`) also read the `lang` cookie and inject a language instruction into their prompts so AI responses are in the user's language.
+
+### My Waters (USGS gauges)
+
+`src/lib/server/usgs.ts` wraps the USGS Water Data OGC API (`https://api.waterdata.usgs.gov/ogcapi/v1`; `monitoring-locations`, `latest-continuous`, `continuous`; param 00060 discharge cfs, 00065 stage ft). River search uses a CQL2 filter (`filter-lang=cql-text`) with `CASEI(...) LIKE CASEI(...)` — `ILIKE`/`UPPER()` are not supported — restricted to `site_type_code = 'ST'`, then keeps gauges with a reading in the last 7 days. `parseQuery` rejects queries under 3 letters. Everything goes through shared in-process TTL caches (latest 5 min, series 10 min, site metadata 24 h, stale data kept for 24 h and served when USGS fails), batched multi-site requests, in-flight dedupe, and a global 60 s backoff after a 429 (`Retry-After` honored). `USGS_API_KEY` (optional, sent as `X-Api-Key`) raises USGS' rate limit; `USGS_API_URL` overrides the base URL. `waterGauge` rows (userId nullable, `(userId, siteId)` unique, `sortOrder`) are owned data: included in backup/restore, admin user-delete, and `claimOrphanRows`. The client store `src/lib/stores/waters.svelte.ts` is warmed by the root layout on every page load when `hasWaters` (set by `+layout.server.ts`), so the tab is already filled when opened.
 
 ### Backup & restore
 
@@ -374,6 +383,8 @@ SvelteKit's CSRF origin check stays **on**; what broke in 1.1.0 was the origin i
 | `OIDC_PROVIDER_NAME` | `SSO` | Label on the login button ("Sign in with …"). |
 | `OIDC_AUTO_CREATE` | `true` | `false` = only existing local users (matched by verified email, or already linked) may sign in via OIDC. |
 | `OIDC_ALLOW_HTTP` | _(unset)_ | `true` permits a plain-HTTP issuer. Development only. |
+| `USGS_API_KEY` | _(unset)_ | Optional api.waterdata.usgs.gov key (sent as `X-Api-Key`) for a higher rate limit. My Waters works without it. |
+| `USGS_API_URL` | `https://api.waterdata.usgs.gov/ogcapi/v1` | Override the USGS API base URL (tests/proxies). |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | _(unset)_ | SMTP config for "forgot password" reset emails (`src/lib/server/mail.ts`, nodemailer). Needs at least `SMTP_HOST` + `SMTP_FROM`; otherwise the feature is hidden. Reset links use `BASE_URL`. |
 | `DEMO_MODE` | _(unset)_ | If set to any value, enables read-only demo mode. All writes are blocked server-side; the UI shows a banner and a toast on submit attempts. Language switching still works. |
 | `CHATBOT` | _(unset)_ | If set to any truthy value, enables the AI chatbot widget. Requires `LITELLM_URL` and `LITELLM_MODEL`. |

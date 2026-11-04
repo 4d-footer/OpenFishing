@@ -13,7 +13,8 @@ import {
 	rod,
 	reel,
 	fishingLine,
-	combo
+	combo,
+	waterGauge
 } from '#lib/server/db/schema.js';
 import { asc, eq, inArray } from 'drizzle-orm';
 import { hashPassword, generateApiToken, reprovisionAdmin } from '#lib/server/auth.js';
@@ -198,7 +199,7 @@ export const actions: Actions = {
 		]);
 
 		// Delete top-level owned rows (children cascade via their own FKs).
-		for (const table of [fishCatch, spot, lure, combo, reel, rod, fishingLine] as const) {
+		for (const table of [fishCatch, spot, lure, combo, reel, rod, fishingLine, waterGauge] as const) {
 			await db.delete(table).where(eq(table.userId, id));
 		}
 		// userSetting + chatMessage cascade via user FK.

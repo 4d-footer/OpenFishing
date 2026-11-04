@@ -24,6 +24,7 @@ export interface BackupPayload {
 	lines: Record<string, unknown>[];
 	combos: Record<string, unknown>[];
 	reelLineLogs: Record<string, unknown>[];
+	waterGauges?: Record<string, unknown>[];
 }
 
 // Timestamp fields per collection — revived from ISO strings back to Date on import.
@@ -36,7 +37,8 @@ const DATE_FIELDS: Record<string, string[]> = {
 	reels: ['createdAt', 'updatedAt'],
 	lines: ['createdAt', 'updatedAt'],
 	combos: ['createdAt', 'updatedAt'],
-	reelLineLogs: ['spooledAt', 'createdAt']
+	reelLineLogs: ['spooledAt', 'createdAt'],
+	waterGauges: ['createdAt']
 };
 
 export function getAppVersion(): string {
@@ -73,6 +75,7 @@ export function buildBackup(scope: BackupScope, userId: string | null): BackupPa
 	const reels = db.select().from(s.reel).where(ownerCond(s.reel.userId)).all();
 	const lines = db.select().from(s.fishingLine).where(ownerCond(s.fishingLine.userId)).all();
 	const combos = db.select().from(s.combo).where(ownerCond(s.combo.userId)).all();
+	const waterGauges = db.select().from(s.waterGauge).where(ownerCond(s.waterGauge.userId)).all();
 
 	const lureIds = lures.map((l) => l.id);
 	const spotIds = spots.map((x) => x.id);
@@ -90,7 +93,7 @@ export function buildBackup(scope: BackupScope, userId: string | null): BackupPa
 
 	const payload: BackupPayload = {
 		meta: { exportedAt: new Date().toISOString(), appVersion: getAppVersion(), schemaHash: getSchemaHash(client), scope },
-		lures, tags, spots, spotTags, spotPhotos, catches, catchPhotos, rods, reels, lines, combos, reelLineLogs
+		lures, tags, spots, spotTags, spotPhotos, catches, catchPhotos, rods, reels, lines, combos, reelLineLogs, waterGauges
 	};
 	if (all) payload.users = db.select().from(s.user).all();
 	return payload;
@@ -192,6 +195,7 @@ export function restoreUserBackup(payload: BackupPayload, userId: string | null)
 		db.delete(s.rod).where(userWhere(s.rod.userId)).run();
 		db.delete(s.reel).where(userWhere(s.reel.userId)).run();
 		db.delete(s.fishingLine).where(userWhere(s.fishingLine.userId)).run();
+		db.delete(s.waterGauge).where(userWhere(s.waterGauge.userId)).run();
 
 		// Re-stamp ownership on owned rows (a user's own backup already matches; this is defensive).
 		const own = (rows: Record<string, unknown>[]) => rows.map((r) => ({ ...r, userId }));
@@ -207,6 +211,7 @@ export function restoreUserBackup(payload: BackupPayload, userId: string | null)
 		insertAll(s.combo, own(payload.combos), DATE_FIELDS.combos);
 		insertAll(s.fishCatch, own(payload.catches), DATE_FIELDS.catches);
 		insertAll(s.catchPhoto, payload.catchPhotos, []);
+		insertAll(s.waterGauge, own(payload.waterGauges ?? []), DATE_FIELDS.waterGauges);
 
 		return { lureCount: payload.lures.length, spotCount: payload.spots.length, catchCount: payload.catches.length };
 	});
@@ -229,6 +234,7 @@ export function restoreAllBackup(payload: BackupPayload): { userCount: number; l
 		db.delete(s.rod).run();
 		db.delete(s.reel).run();
 		db.delete(s.fishingLine).run();
+		db.delete(s.waterGauge).run();
 		db.delete(s.userSetting).run();
 		db.delete(s.user).run();
 
@@ -245,6 +251,7 @@ export function restoreAllBackup(payload: BackupPayload): { userCount: number; l
 		insertAll(s.combo, payload.combos, DATE_FIELDS.combos);
 		insertAll(s.fishCatch, payload.catches, DATE_FIELDS.catches);
 		insertAll(s.catchPhoto, payload.catchPhotos, []);
+		insertAll(s.waterGauge, payload.waterGauges ?? [], DATE_FIELDS.waterGauges);
 
 		return { userCount: (payload.users ?? []).length, lureCount: payload.lures.length, spotCount: payload.spots.length, catchCount: payload.catches.length };
 	});

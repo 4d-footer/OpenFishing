@@ -26,6 +26,21 @@ export const user = sqliteTable('user', {
 	updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date())
 }, (t) => [uniqueIndex('user_oidc_identity_idx').on(t.oidcIssuer, t.oidcSubject)]);
 
+// A USGS stream gauge a user follows on the "My Waters" tab. Live readings are never stored:
+// they are fetched from the USGS Water Data API (and cached in memory) on demand.
+export const waterGauge = sqliteTable('water_gauge', {
+	id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+	userId: text('user_id').references(() => user.id, { onDelete: 'cascade' }),
+	siteId: text('site_id').notNull(), // USGS monitoring location id, e.g. "USGS-06934500"
+	name: text('name').notNull(),
+	river: text('river'),
+	state: text('state'),
+	lat: real('lat'),
+	lng: real('lng'),
+	sortOrder: integer('sort_order').notNull().default(0),
+	createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date())
+}, (t) => [uniqueIndex('water_gauge_user_site_idx').on(t.userId, t.siteId)]);
+
 export const userSetting = sqliteTable('user_setting', {
 	userId: text('user_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
 	key: text('key').notNull(),

@@ -32,6 +32,9 @@ export const variables = defineEnvVars({
 	OIDC_AUTO_CREATE: optional('Set to "false" to stop creating accounts on first OIDC login'),
 	OIDC_ALLOW_HTTP: optional('Set to "true" to allow a plain-HTTP issuer (development only)'),
 
+	USGS_API_KEY: optional('Optional USGS Water Data API key (raises the hourly request limit)'),
+	USGS_API_URL: optional('Override the USGS Water Data OGC API base URL (default: https://api.waterdata.usgs.gov/ogcapi/v1)'),
+
 	SMTP_HOST: optional('SMTP server for password-reset emails'),
 	SMTP_PORT: optional('SMTP port (default: 587; 465 implies TLS)'),
 	SMTP_SECURE: optional('Set to "true" for implicit TLS'),
