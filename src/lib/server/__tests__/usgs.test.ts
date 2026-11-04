@@ -270,6 +270,55 @@ describe('getSeries', () => {
 	});
 });
 
+describe('getRangeSeries', () => {
+	const pts = (n: number, param = '00060', step = 15 * 60_000) =>
+		Array.from({ length: n }, (_, i) => row('USGS-A0000001', param, 100 + i, iso((n - i) * step)));
+
+	it.each([24, 48, 72, 168])('asks for exactly the %i-hour window with room for 5-minute data', async (h) => {
+		handler = () => ok(pts(20));
+		const r = await u.getRangeSeries('USGS-A0000001', h);
+		const [from, to] = calls[0].searchParams.get('time')!.split('/');
+		expect(Date.parse(to) - Date.parse(from)).toBe(h * 3600_000);
+		expect(Number(calls[0].searchParams.get('limit'))).toBeGreaterThanOrEqual(h * 12 * 2);
+		expect(r.series?.param).toBe('00060');
+		expect(r.stale).toBe(false);
+	});
+
+	it('keeps more detail than the 24h tile series, but still bounds it', async () => {
+		handler = () => ok(pts(2000, '00060', 5 * 60_000));
+		const n = (await u.getRangeSeries('USGS-A0000001', 168)).series!.points.length;
+		expect(n).toBeGreaterThan(121);
+		expect(n).toBeLessThanOrEqual(241);
+	});
+
+	it('caches per site and window', async () => {
+		handler = () => ok(pts(20));
+		await u.getRangeSeries('USGS-A0000001', 48);
+		await u.getRangeSeries('USGS-A0000001', 48);
+		expect(calls.length).toBe(1);
+		await u.getRangeSeries('USGS-A0000001', 72);
+		expect(calls.length).toBe(2);
+	});
+
+	it('returns null series when the site has too little data', async () => {
+		handler = () => ok(pts(2));
+		expect((await u.getRangeSeries('USGS-A0000001', 24)).series).toBeNull();
+	});
+
+	it('throws when USGS fails and nothing is cached; serves the old copy (stale) when something is', async () => {
+		handler = () => new Response('', { status: 500 });
+		await expect(u.getRangeSeries('USGS-A0000001', 24)).rejects.toBeInstanceOf(u.UsgsError);
+		handler = () => ok(pts(20));
+		await u.getRangeSeries('USGS-A0000001', 24);
+		vi.useFakeTimers({ now: Date.now() + 11 * 60_000, toFake: ['Date'] });
+		handler = () => new Response('', { status: 500 });
+		const r = await u.getRangeSeries('USGS-A0000001', 24);
+		vi.useRealTimers();
+		expect(r.stale).toBe(true);
+		expect(r.series?.points.length).toBe(20);
+	});
+});
+
 describe('trendOf', () => {
 	const series = (vals: number[], param: '00060' | '00065' = '00060') => ({
 		param,

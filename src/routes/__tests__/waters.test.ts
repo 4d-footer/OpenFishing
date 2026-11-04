@@ -17,12 +17,19 @@ const mockGetSite = vi.fn();
 const mockGetLatest = vi.fn();
 const mockGetSeries = vi.fn();
 const mockSearch = vi.fn();
+const mockRange = vi.fn();
+const mockForecast = vi.fn();
 vi.mock('#lib/server/usgs.js', async (orig) => ({
 	...(await orig<typeof import('#lib/server/usgs.js')>()),
 	getSite: mockGetSite,
 	getLatest: mockGetLatest,
 	getSeries: mockGetSeries,
-	searchGauges: mockSearch
+	searchGauges: mockSearch,
+	getRangeSeries: mockRange
+}));
+vi.mock('#lib/server/forecast.js', async (orig) => ({
+	...(await orig<typeof import('#lib/server/forecast.js')>()),
+	getForecast: mockForecast
 }));
 
 const { db } = await import('#lib/server/db/index.js');
@@ -33,6 +40,9 @@ const save = (await import('../api/waters/+server')).POST;
 const del = (await import('../api/waters/[id]/+server')).DELETE;
 const data = (await import('../api/waters/data/+server')).GET;
 const search = (await import('../api/waters/search/+server')).GET;
+const history = (await import('../api/waters/[id]/history/+server')).GET;
+const forecastRoute = (await import('../api/waters/[id]/forecast/+server')).GET;
+const { ForecastError } = await import('#lib/server/forecast.js');
 const pageLoad = (await import('../waters/+page.server')).load;
 
 const A = { user: { id: 'user-a' } } as any;
@@ -58,6 +68,8 @@ beforeEach(async () => {
 	mockGetLatest.mockReset().mockResolvedValue({ data: new Map(), stale: false });
 	mockGetSeries.mockReset().mockResolvedValue({ data: new Map(), stale: false });
 	mockSearch.mockReset();
+	mockRange.mockReset();
+	mockForecast.mockReset();
 });
 
 describe('POST /api/waters (follow a gauge)', () => {
@@ -215,5 +227,60 @@ describe('/waters page load', () => {
 	it("does not show other users' gauges", async () => {
 		await post(B, { siteId: 'USGS-06000001' });
 		expect(((await pageLoad({ locals: A } as any)) as any).gauges).toEqual([]);
+	});
+});
+
+describe('GET /api/waters/:id/history and /forecast', () => {
+	const call = (fn: any, locals: any, id: string, qs = '') => fn({ params: { id }, url: new URL('http://x/?' + qs), locals } as any) as Promise<Response>;
+	const follow = async (locals: any, n = 1) => (await (await post(locals, { siteId: `USGS-0${6000000 + n}` })).json()).gauge.id as string;
+
+	it.each([['hours=5'], ['hours=abc'], ['']])('history rejects %j', async (qs) => {
+		const id = await follow(A);
+		expect((await call(history, A, id, qs)).status).toBe(400);
+		expect(mockRange).not.toHaveBeenCalled();
+	});
+
+	it.each([24, 48, 72, 168])('history returns the %i-hour series for the gauge\'s site', async (h) => {
+		const id = await follow(A);
+		mockRange.mockResolvedValue({ series: { param: '00060', points: [[1, 2]] }, stale: false });
+		const res = await call(history, A, id, `hours=${h}`);
+		expect(res.status).toBe(200);
+		expect(mockRange).toHaveBeenCalledWith('USGS-06000001', h);
+		expect(await res.json()).toMatchObject({ hours: h, series: { param: '00060' }, stale: false });
+	});
+
+	it("history and forecast 404 for another user's gauge or an unknown id, without calling out", async () => {
+		const id = await follow(B);
+		for (const [fn, qs] of [[history, 'hours=24'], [forecastRoute, '']] as const) {
+			expect((await call(fn, A, id, qs)).status).toBe(404);
+			expect((await call(fn, A, 'nope', qs)).status).toBe(404);
+		}
+		expect(mockRange).not.toHaveBeenCalled();
+		expect(mockForecast).not.toHaveBeenCalled();
+	});
+
+	it('history maps USGS trouble to 503 / 429', async () => {
+		const id = await follow(A);
+		mockRange.mockRejectedValue(new UsgsError('unavailable'));
+		expect((await call(history, A, id, 'hours=24')).status).toBe(503);
+		mockRange.mockRejectedValue(new UsgsError('rate_limited'));
+		expect((await call(history, A, id, 'hours=24')).status).toBe(429);
+	});
+
+	it('forecast passes the gauge location, returns the forecast, and is never cached by the browser', async () => {
+		const id = await follow(A);
+		mockForecast.mockResolvedValue({ forecast: { source: 'nws', param: '00060', issuedAt: null, lid: 'X', points: [[1, 2]] }, stale: false });
+		const res = await call(forecastRoute, A, id);
+		expect(mockForecast).toHaveBeenCalledWith('USGS-06000001', 38.5, -91.5);
+		expect(res.headers.get('cache-control')).toContain('no-store');
+		expect((await res.json()).forecast.source).toBe('nws');
+	});
+
+	it('forecast returns null when none exists, and 503 when NOAA is down', async () => {
+		const id = await follow(A);
+		mockForecast.mockResolvedValue({ forecast: null, stale: false });
+		expect(await (await call(forecastRoute, A, id)).json()).toEqual({ forecast: null, stale: false });
+		mockForecast.mockRejectedValue(new ForecastError('unavailable'));
+		expect((await call(forecastRoute, A, id)).status).toBe(503);
 	});
 });

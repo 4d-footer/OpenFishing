@@ -61,7 +61,7 @@ export type Trend = 'rising' | 'falling' | 'steady';
 
 // ── Small TTL cache ────────────────────────────────────────────────────────────
 
-class TtlCache<V> {
+export class TtlCache<V> {
 	private m = new Map<string, { v: V; exp: number }>();
 	constructor(private ttl: number, private max = 2000) {}
 	get(key: string): { v: V; fresh: boolean } | undefined {
@@ -86,6 +86,7 @@ class TtlCache<V> {
 const latestCache = new TtlCache<Latest>(TTL.latest);
 const seriesCache = new TtlCache<Series | null>(TTL.series);
 const siteCache = new TtlCache<Gauge | null>(TTL.site);
+const rangeCache = new TtlCache<Series | null>(TTL.series, 500);
 const searchCache = new TtlCache<{ gauges: Gauge[]; truncated: boolean }>(TTL.search, 200);
 const inflight = new Map<string, Promise<unknown>>();
 let backoffUntil = 0;
@@ -95,6 +96,7 @@ export function resetUsgsState(): void {
 	latestCache.clear();
 	seriesCache.clear();
 	siteCache.clear();
+	rangeCache.clear();
 	searchCache.clear();
 	inflight.clear();
 	backoffUntil = 0;
@@ -340,17 +342,18 @@ export function peekLatest(ids: string[]): Map<string, Latest> {
 // ── 24-hour series ─────────────────────────────────────────────────────────────
 
 const MAX_POINTS = 120;
+const MAX_RANGE_POINTS = 240;
 
-function downsample(points: [number, number][]): [number, number][] {
-	if (points.length <= MAX_POINTS) return points;
-	const step = points.length / MAX_POINTS;
+function downsample(points: [number, number][], max = MAX_POINTS): [number, number][] {
+	if (points.length <= max) return points;
+	const step = points.length / max;
 	const out: [number, number][] = [];
-	for (let i = 0; i < MAX_POINTS; i++) out.push(points[Math.floor(i * step)]);
+	for (let i = 0; i < max; i++) out.push(points[Math.floor(i * step)]);
 	out.push(points[points.length - 1]);
 	return out;
 }
 
-function parseSeries(features: any[]): Map<string, Series | null> {
+function parseSeries(features: any[], max = MAX_POINTS): Map<string, Series | null> {
 	const by = new Map<string, Record<string, [number, number][]>>();
 	for (const f of features) {
 		const p = f?.properties;
@@ -365,7 +368,7 @@ function parseSeries(features: any[]): Map<string, Series | null> {
 	const out = new Map<string, Series | null>();
 	for (const [id, rec] of by) {
 		const pick = (rec[DISCHARGE]?.length ?? 0) >= 3 ? DISCHARGE : (rec[STAGE]?.length ?? 0) >= 3 ? STAGE : null;
-		out.set(id, pick ? { param: pick, points: downsample(rec[pick]!.sort((a, b) => a[0] - b[0])) } : null);
+		out.set(id, pick ? { param: pick, points: downsample(rec[pick]!.sort((a, b) => a[0] - b[0]), max) } : null);
 	}
 	return out;
 }
@@ -410,6 +413,40 @@ export async function getSeries(ids: string[], hours = 24): Promise<{ data: Map<
 	}
 	for (const id of unique) if (!data.has(id)) data.set(id, null);
 	return { data, stale };
+}
+
+/** Hour windows the history chart offers. */
+export const HISTORY_HOURS = [24, 48, 72, 168] as const;
+
+/**
+ * History for one site over `hours` (24/48/72/168): discharge, else stage. Cached per site and window
+ * (10 min); a failed refresh serves the older copy. Throws UsgsError only when there is nothing to show.
+ */
+export async function getRangeSeries(siteId: string, hours: number): Promise<{ series: Series | null; stale: boolean }> {
+	const key = `${siteId}|${hours}`;
+	const hit = rangeCache.get(key);
+	if (hit?.fresh) return { series: hit.v, stale: false };
+	try {
+		const end = new Date();
+		const start = new Date(end.getTime() - hours * 3600_000);
+		const iso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+		const body = await once(`range|${key}`, () =>
+			usgsGet('collections/continuous/items', {
+				monitoring_location_id: siteId,
+				parameter_code: `${DISCHARGE},${STAGE}`,
+				time: `${iso(start)}/${iso(end)}`,
+				properties: 'monitoring_location_id,parameter_code,time,value',
+				// sites report every 5-15 min for up to two parameters; stay well above a week of 5-min data
+				limit: hours * 12 * 2 + 100
+			})
+		);
+		const v = parseSeries(body?.features ?? [], MAX_RANGE_POINTS).get(siteId) ?? null;
+		rangeCache.set(key, v);
+		return { series: v, stale: false };
+	} catch (e) {
+		if (e instanceof UsgsError && hit) return { series: hit.v, stale: true };
+		throw e;
+	}
 }
 
 export function peekSeries(ids: string[]): Map<string, Series | null> {
