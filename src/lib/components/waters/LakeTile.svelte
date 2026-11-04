@@ -27,6 +27,7 @@
 
 <article id="tile-{g.id}" data-testid="water-tile" data-kind={g.kind} data-selected={selected}
 	style="background:var(--of-bg-surface); border:1px solid {selected ? 'var(--of-accent)' : 'var(--of-border-subtle)'}; border-radius:14px; padding:18px; transition:border-color .3s;">
+	<div data-testid="tile-head" style="min-height:112px;">
 	<header style="display:flex; gap:12px; align-items:flex-start;">
 		<button type="button" onclick={onselect} data-testid="tile-select" aria-label={g.name}
 			style="display:flex; gap:12px; align-items:flex-start; flex:1; min-width:0; text-align:left; background:none; border:0; padding:0; cursor:pointer; color:inherit; font:inherit;">
@@ -40,8 +41,9 @@
 		<button type="button" onclick={onremove} disabled={busy} aria-label={t.watersRemove} title={t.watersRemove}
 			style="font-size:0.8rem; padding:3px 9px; line-height:1; border-radius:9px; cursor:pointer; color:var(--of-text-3); background:transparent; border:1px solid var(--of-border-subtle);">✕</button>
 	</header>
+	</div>
 
-	<div style="margin-top:14px;"><WeatherStrip w={weather} {t} loading={weatherLoading} /></div>
+	<div style="margin-top:12px;"><WeatherStrip w={weather} {t} loading={weatherLoading} /></div>
 
 	{#if weather}
 		<div style="display:flex; gap:22px; margin-top:14px; align-items:flex-end; flex-wrap:wrap;" data-testid="lake-readings">
