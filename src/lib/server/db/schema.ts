@@ -38,6 +38,7 @@ export const waterGauge = sqliteTable('water_gauge', {
 	lat: real('lat'),
 	lng: real('lng'),
 	sortOrder: integer('sort_order').notNull().default(0),
+	alerts: text('alerts'), // JSON AlertRules ("notify me when…"), null = none
 	createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date())
 }, (t) => [uniqueIndex('water_gauge_user_site_idx').on(t.userId, t.siteId)]);
 

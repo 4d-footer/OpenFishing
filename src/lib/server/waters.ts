@@ -18,6 +18,8 @@ export const MAX_GAUGES = 24;
 
 export type GaugeRow = typeof waterGauge.$inferSelect;
 
+import { rulesFromJson, type AlertRules } from '#lib/waters/alerts.js';
+
 export type WaterEntryKind = 'gauge' | 'lake' | 'reservoir' | 'pond';
 
 /** A followed water is a USGS gauge (`USGS-<n>`) or a named lake/reservoir/pond (`GNIS-<id>`, no gauge). */
@@ -37,6 +39,7 @@ export interface GaugeView {
 	latest: Latest | null;
 	series: { param: string; points: [number, number][] } | null;
 	trend: Trend | null;
+	alerts: AlertRules | null; // the user's "notify me when…" criteria
 }
 
 export async function listGauges(locals: App.Locals): Promise<GaugeRow[]> {
@@ -64,7 +67,8 @@ export function toView(row: GaugeRow, latest: Latest | null = null, series: Seri
 		usgsUrl: gauge ? `https://waterdata.usgs.gov/monitoring-location/${number}/` : null,
 		latest,
 		series,
-		trend: trendOf(series)
+		trend: trendOf(series),
+		alerts: rulesFromJson(row.alerts)
 	};
 }
 

@@ -5,6 +5,7 @@
 	import type { GaugeView } from '#lib/server/waters.js';
 	import { waters } from '#lib/stores/waters.svelte.js';
 	import { condition } from '#lib/waters/weather.js';
+	import { contextOf, evaluate, markerStatus, MARKER_COLOR } from '#lib/waters/alerts.js';
 	import { bufferBounds, framingBounds, METRICS, readingOf, formatValue, TOPO_TILE_URL, TOPO_ATTRIBUTION, TOPO_MAX_ZOOM } from '#lib/waters/geo.js';
 
 	let {
@@ -42,6 +43,9 @@
 			const wind = w.windMph !== null ? ` · ${Math.round(w.windMph)} mph` : '';
 			rows.push(`${wc.icon} <b>${w.tempF !== null ? Math.round(w.tempF) + '°F' : ''}</b> ${esc(t[wc.key])}${wind}`);
 		}
+		const ev = evaluate(g.alerts, contextOf(g.latest, w ?? null));
+		if (ev.status === 'met') rows.push(`<span style="color:${MARKER_COLOR.good}">●</span> ${esc(t.watersMet)}`);
+		if (ev.status === 'unmet') rows.push(`<span style="color:${MARKER_COLOR.bad}">●</span> ${esc(t.watersUnmet)}`);
 		const when = g.latest?.discharge?.time ?? g.latest?.stage?.time ?? g.latest?.extra?.['00010']?.time;
 		if (when) rows.push(`<span style="opacity:.7">${esc(t.watersUpdated)} ${esc(new Date(when).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</span>`);
 		return `<div style="font-size:12px; line-height:1.45;"><b>${esc(g.name)}</b><br>${esc(g.kind === 'gauge' ? (g.river ?? '') : g.kind === 'reservoir' ? t.watersKindReservoir : g.kind === 'pond' ? t.watersKindPond : t.watersKindLake)}${g.state ? ' · ' + esc(g.state) : ''}<br>${rows.join('<br>')}</div>`;
@@ -65,7 +69,7 @@
 			const on = g.id === selectedId;
 			const size = on ? 24 : 18;
 			const icon = L.divIcon({
-				html: `<span style="display:block; width:${size}px; height:${size}px; border-radius:${g.kind === 'gauge' ? '50%' : '5px'}; background:var(--of-accent-solid); border:3px solid #fff; box-shadow:0 0 0 ${on ? 3 : 1}px ${on ? 'var(--of-accent-solid)' : 'rgba(0,0,0,.5)'}, 0 2px 5px rgba(0,0,0,.4);"></span>`,
+				html: `<span style="display:block; width:${size}px; height:${size}px; border-radius:${g.kind === 'gauge' ? '50%' : '5px'}; background:${MARKER_COLOR[markerStatus(g.alerts, contextOf(g.latest, waters.weather[g.id] ?? null), g.trend)]}; border:3px solid #fff; box-shadow:0 0 0 ${on ? 3 : 1}px ${on ? 'var(--of-accent-solid)' : 'rgba(0,0,0,.5)'}, 0 2px 5px rgba(0,0,0,.4);"></span>`,
 				className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2]
 			});
 			L.marker([g.lat, g.lng], { icon, keyboard: true, title: g.name, zIndexOffset: on ? 1000 : 0 })

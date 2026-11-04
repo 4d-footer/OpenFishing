@@ -1,4 +1,5 @@
 import type { GaugeView } from '#lib/server/waters.js';
+import type { AlertRules } from '#lib/waters/alerts.js';
 import type { Weather } from '#lib/server/weather.js';
 
 /** How long a client-side copy counts as fresh; the server has its own (5 min / 10 min) caches. */
@@ -79,6 +80,19 @@ export function seedWaters(gauges: GaugeView[]) {
 export function addWater(g: GaugeView) {
 	waters.gauges = [...waters.gauges.filter((x) => x.siteId !== g.siteId), g];
 	void loadWeather(true);
+}
+
+/** Save (or with null, clear) a water's alert criteria. Resolves true when the server accepted them. */
+export async function saveAlerts(id: string, alerts: AlertRules | null): Promise<boolean> {
+	try {
+		const res = await fetch('/api/waters/' + id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alerts }) });
+		if (!res.ok) return false;
+		const body = (await res.json()) as { alerts: AlertRules | null };
+		waters.gauges = waters.gauges.map((g) => (g.id === id ? { ...g, alerts: body.alerts } : g));
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export function removeWater(id: string) {

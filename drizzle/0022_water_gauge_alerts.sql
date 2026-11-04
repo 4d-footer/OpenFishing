@@ -1,0 +1,1 @@
+ALTER TABLE `water_gauge` ADD `alerts` text;

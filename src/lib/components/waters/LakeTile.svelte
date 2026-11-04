@@ -7,6 +7,9 @@
 	import FlowChart from './FlowChart.svelte';
 	import GaugeThumb from './GaugeThumb.svelte';
 	import WeatherStrip from './WeatherStrip.svelte';
+	import AlertSettings from './AlertSettings.svelte';
+	import AlertStatus from './AlertStatus.svelte';
+	import { saveAlerts } from '#lib/stores/waters.svelte.js';
 
 	let {
 		g, t, weather, weatherLoading = false, busy, selected = false, onselect, onremove
@@ -15,6 +18,7 @@
 		busy: boolean; selected?: boolean; onselect: () => void; onremove: () => void;
 	} = $props();
 
+	let editing = $state(false);
 	let key = $state<(typeof WEATHER_METRICS)[number]['key']>('air');
 	const metric = $derived(WEATHER_METRICS.find((m) => m.key === key) ?? WEATHER_METRICS[0]);
 	const kindLabel = $derived(g.kind === 'reservoir' ? t.watersKindReservoir : g.kind === 'pond' ? t.watersKindPond : t.watersKindLake);
@@ -27,23 +31,26 @@
 
 <article id="tile-{g.id}" data-testid="water-tile" data-kind={g.kind} data-selected={selected}
 	style="background:var(--of-bg-surface); border:1px solid {selected ? 'var(--of-accent)' : 'var(--of-border-subtle)'}; border-radius:14px; padding:18px; transition:border-color .3s;">
-	<div data-testid="tile-head" style="min-height:112px;">
+	<div data-testid="tile-head" style="height:124px;">
 	<header style="display:flex; gap:12px; align-items:flex-start;">
 		<button type="button" onclick={onselect} data-testid="tile-select" aria-label={g.name}
 			style="display:flex; gap:12px; align-items:flex-start; flex:1; min-width:0; text-align:left; background:none; border:0; padding:0; cursor:pointer; color:inherit; font:inherit;">
 			<GaugeThumb lat={g.lat} lng={g.lng} size={84} alt={t.watersThumbAlt} />
 			<span style="flex:1; min-width:0; display:block;">
-				<span style="display:block; font-size:0.9rem; font-weight:600; color:var(--of-text); overflow-wrap:anywhere;">{g.name}</span>
+				<span style="display:block; font-size:0.9rem; font-weight:600; color:var(--of-text); overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:3; line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;" title={g.name}>{g.name}</span>
 				<span style="display:block; font-size:0.72rem; color:var(--of-text-4); margin-top:2px;">{kindLabel}{g.state ? ` · ${g.state}` : ''}</span>
 				<span style="display:block; font-size:0.72rem; color:var(--of-text-4); margin-top:6px;" data-testid="no-gauge">{t.watersNoGauge}</span>
 			</span>
 		</button>
+		<button type="button" onclick={() => (editing = !editing)} aria-label={t.watersSettings} title={t.watersSettings} aria-expanded={editing} data-testid="tile-menu"
+			style="font-size:1rem; padding:2px 8px; line-height:1.1; border-radius:9px; cursor:pointer; color:{editing || g.alerts ? 'var(--of-accent)' : 'var(--of-text-3)'}; background:transparent; border:1px solid {editing ? 'var(--of-accent)' : 'var(--of-border-subtle)'};">⋮</button>
 		<button type="button" onclick={onremove} disabled={busy} aria-label={t.watersRemove} title={t.watersRemove}
 			style="font-size:0.8rem; padding:3px 9px; line-height:1; border-radius:9px; cursor:pointer; color:var(--of-text-3); background:transparent; border:1px solid var(--of-border-subtle);">✕</button>
 	</header>
 	</div>
 
 	<div style="margin-top:12px;"><WeatherStrip w={weather} {t} loading={weatherLoading} /></div>
+	{#if editing}<AlertSettings {g} {t} onsave={(r) => saveAlerts(g.id, r)} onclose={() => (editing = false)} />{/if}
 
 	{#if weather}
 		<div style="display:flex; gap:22px; margin-top:14px; align-items:flex-end; flex-wrap:wrap;" data-testid="lake-readings">
@@ -78,4 +85,5 @@
 			<p style="margin:12px 0; font-size:0.8rem; color:var(--of-text-4);">{weatherLoading ? t.watersChartLoading : t.watersNoHistory}</p>
 		{/if}
 	</div>
+	<AlertStatus {g} {t} {weather} />
 </article>

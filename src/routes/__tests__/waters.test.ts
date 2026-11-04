@@ -57,6 +57,7 @@ const forecastRoute = (await import('../api/waters/[id]/forecast/+server')).GET;
 const { ForecastError } = await import('#lib/server/forecast.js');
 const weatherRoute = (await import('../api/waters/weather/+server')).GET;
 const { WaterbodyError } = await import('#lib/server/waterbodies.js');
+const patch = (await import('../api/waters/[id]/+server')).PATCH;
 const pageLoad = (await import('../waters/+page.server')).load;
 
 const A = { user: { id: 'user-a' } } as any;
@@ -449,5 +450,45 @@ describe('GET /api/waters/weather', () => {
 	});
 	it('works with nothing followed', async () => {
 		expect((await (await get(weatherRoute, A)).json()).weather).toEqual({});
+	});
+});
+
+describe('PATCH /api/waters/:id (alert criteria)', () => {
+	const send = (locals: any, id: string, body: unknown) =>
+		patch({ params: { id }, locals, request: new Request('http://x/', { method: 'PATCH', body: typeof body === 'string' ? body : JSON.stringify(body) }) } as any) as Promise<Response>;
+
+	it('saves, returns, and shows the criteria in the data and page load', async () => {
+		const id = (await (await post(A, { siteId: 'USGS-06000001' })).json()).gauge.id;
+		const res = await send(A, id, { alerts: { flow: { min: 100, max: 500 }, conditions: ['clear'], junk: 1 } });
+		expect(res.status).toBe(200);
+		expect((await res.json()).alerts).toEqual({ flow: { min: 100, max: 500 }, conditions: ['clear'] });
+		expect((await (await get(data, A)).json()).gauges[0].alerts).toEqual({ flow: { min: 100, max: 500 }, conditions: ['clear'] });
+		expect(((await pageLoad({ locals: A } as any)) as any).gauges[0].alerts.flow.min).toBe(100);
+	});
+	it('clears with null or empty criteria', async () => {
+		const id = (await (await post(A, { siteId: 'USGS-06000001' })).json()).gauge.id;
+		await send(A, id, { alerts: { wind: { max: 12 } } });
+		expect((await send(A, id, { alerts: null })).status).toBe(200);
+		expect((await (await get(data, A)).json()).gauges[0].alerts).toBeNull();
+	});
+	it('works for a lake (weather criteria only) and keeps other fields intact', async () => {
+		mockLake.mockResolvedValue(lake());
+		const id = (await (await post(A, { siteId: 'GNIS-1559164' })).json()).gauge.id;
+		expect((await send(A, id, { alerts: { airTemp: { min: 50 } } })).status).toBe(200);
+		const [row] = await db.select().from(schema.waterGauge);
+		expect(row).toMatchObject({ river: 'reservoir', name: 'Cacapon Lake' });
+	});
+	it('rejects bad input without changing anything', async () => {
+		const id = (await (await post(A, { siteId: 'USGS-06000001' })).json()).gauge.id;
+		await send(A, id, { alerts: { flow: { min: 1 } } });
+		for (const bad of ['not json', {}, { alerts: 'x' }, { alerts: { flow: { min: 9, max: 1 } } }, { alerts: { conditions: ['hail'] } }]) {
+			expect((await send(A, id, bad)).status).toBe(400);
+		}
+		expect((await (await get(data, A)).json()).gauges[0].alerts).toEqual({ flow: { min: 1 } });
+	});
+	it("404s someone else's or a missing water", async () => {
+		const id = (await (await post(B, { siteId: 'USGS-06000002' })).json()).gauge.id;
+		expect((await send(A, id, { alerts: null })).status).toBe(404);
+		expect((await send(A, 'nope', { alerts: null })).status).toBe(404);
 	});
 });
